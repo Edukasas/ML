@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from itertools import combinations
 
 # Load sampled datasets
 dfs = []
@@ -101,18 +102,68 @@ desc_std["dispersion"] = data_standard_normalized[features].var()
 print(desc_std)
 
 # Visual analysis
+# 1. Scatter plot matrix (full, with diagonal, outliers removed)
+plt.figure(figsize=(18, 18))
+num_features = len(features)
 
-# 1. Scatter plot matrix (pairplot) for features, colored by label
-sns.pairplot(data_no_outliers, vars=features, hue="label", diag_kind="hist")
-plt.suptitle("Scatter Plot Matrix (Outliers Removed)", y=1.02)
+for i in range(num_features):
+    for j in range(num_features):
+        if j > i:  # <-- skip the upper triangle
+            continue
+        plt.subplot(num_features, num_features, i * num_features + j + 1)
+        
+        if i == j:
+            # Diagonal: histogram for the feature, colored by label
+            for label in sorted(data_no_outliers['label'].unique()):
+                sns.histplot(
+                    data_no_outliers[data_no_outliers['label'] == label][features[i]],
+                    label=f"Label {label}" if j == 0 else "",
+                    kde=False, stat="count", element="step", fill=True, alpha=0.5
+                )
+            if j == 0:
+                plt.legend()
+        else:
+            # Off-diagonal: scatter plot
+            for label in sorted(data_no_outliers['label'].unique()):
+                plt.scatter(
+                    data_no_outliers[data_no_outliers['label'] == label][features[j]],
+                    data_no_outliers[data_no_outliers['label'] == label][features[i]],
+                    label=f"Label {label}" if (i == 0 and j == 0) else "",
+                    alpha=0.6
+                )
+        
+        if j == 0:
+            plt.ylabel(features[i])
+        else:
+            plt.ylabel("")
+        if i == num_features - 1:
+            plt.xlabel(features[j])
+        else:
+            plt.xlabel("")
+
+plt.suptitle("Scatter Plot Matrix (Lower Triangle Only, With Diagonal, Outliers Removed)", y=1.02)
+plt.tight_layout(rect=[0, 0, 1, 0.97])
 plt.show()
 
-# 2. Box plots (rectangular plots) for each feature by label
+# 2. Box plots (rectangular plots) for each feature by label, using data WITHOUT outliers
 plt.figure(figsize=(15, 8))
+palette = sns.color_palette("Set2", n_colors=len(data['label'].unique()))
 for i, feature in enumerate(features):
     plt.subplot(2, 3, i+1)
-    sns.boxplot(x="label", y=feature, data=data_no_outliers)
+    sns.boxplot(x="label", y=feature, data=data_no_outliers, palette=palette)
     plt.title(f"Boxplot of {feature} by Label")
+plt.suptitle("Data with Removed Outliers", y=1.02)
+plt.tight_layout()
+plt.show()
+
+# 3. Box plots (rectangular plots) for each feature by label, using data WITH outliers
+plt.figure(figsize=(15, 8))
+palette = sns.color_palette("Set2", n_colors=len(data['label'].unique()))
+for i, feature in enumerate(features):
+    plt.subplot(2, 3, i+1)
+    sns.boxplot(x="label", y=feature, data=data, palette=palette)
+    plt.title(f"Boxplot of {feature} by Label")
+plt.suptitle("Data with Outliers", y=1.02)
 plt.tight_layout()
 plt.show()
 
@@ -140,3 +191,14 @@ for idx, label in enumerate(labels):
     axes[idx].set_title(f"Correlation Heatmap (Label {label})")
 plt.tight_layout()
 plt.show()
+
+# Export summary tables to Excel
+with pd.ExcelWriter("summary_tables.xlsx") as writer:
+    desc_missing.to_excel(writer, sheet_name="Missing_Values")
+    desc_mean.to_excel(writer, sheet_name="Mean_Imputed")
+    desc_median.to_excel(writer, sheet_name="Median_Imputed")
+    desc.to_excel(writer, sheet_name="Filled_Data")
+    desc_no_out.to_excel(writer, sheet_name="No_Outliers")
+    desc_minmax.to_excel(writer, sheet_name="MinMax_Normalized")
+    desc_std.to_excel(writer, sheet_name="Standard_Normalized")
+print("Summary tables exported to 'summary_tables.xlsx'")
