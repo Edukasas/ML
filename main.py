@@ -67,14 +67,67 @@ def perform_tsne(data, normalized=False):
     plt.grid(True, alpha=0.3)
     plt.show()
 
-# Main script
+# Make sure data_no_outliers is defined before using it in the t-SNE grid!
 data = load_data()
 data_filled = fill_missing_values(data)
 data_no_outliers = remove_outliers(data_filled)
 
-print("=== t-SNE on Raw Data ===")
-perform_tsne(data_no_outliers, normalized=False)
+# t-SNE parameter grids
+perplexities = [5, 25, 50]         # low, mid, high
+learning_rates = [10, 500, 1000]  # low, mid, high
 
-print("\n=== t-SNE on Min-Max Normalized Data ===")
-normalized_data = normalize_data(data_no_outliers)
-perform_tsne(normalized_data, normalized=True)
+# Prepare normalized data
+data_no_outliers_norm = normalize_data(data_no_outliers)
+
+# Combine all t-SNE results into one matrix of subplots
+fig, axes = plt.subplots(len(perplexities), len(learning_rates), figsize=(18, 18), squeeze=False)
+
+for i, perplexity in enumerate(perplexities):
+    for j, lr in enumerate(learning_rates):
+        tsne = TSNE(n_components=2, perplexity=perplexity, learning_rate=lr, random_state=42)
+        X = data_no_outliers_norm[FEATURES]
+        y = data_no_outliers_norm['label']
+        X_tsne = tsne.fit_transform(X)
+        df_tsne = pd.DataFrame(X_tsne, columns=['Dim1', 'Dim2'])
+        df_tsne['label'] = y.values
+        ax = axes[i, j]
+        for label in sorted(df_tsne['label'].unique()):
+            subset = df_tsne[df_tsne['label'] == label]
+            ax.scatter(subset['Dim1'], subset['Dim2'], label=f'Label {label}', alpha=0.7)
+        kl_divergence = tsne.kl_divergence_
+        ax.set_title(f'perplexity={perplexity}, lr={lr}\nKL={kl_divergence:.2f}')
+        ax.set_xlabel('Dim1')
+        ax.set_ylabel('Dim2')
+        ax.grid(True, alpha=0.3)
+        if i == 0 and j == 0:
+            ax.legend()
+        # Print the numbers for each configuration
+        print(f"\nt-SNE embedding (perplexity={perplexity}, learning_rate={lr}):")
+        print(df_tsne.head())
+        print(f"KL Divergence: {kl_divergence:.4f}")
+
+plt.suptitle("t-SNE Grid: Perplexity vs Learning Rate (KL Divergence Shown)", y=1.02)
+plt.tight_layout(rect=[0, 0, 1, 0.97])
+plt.show()
+
+# Default t-SNE for comparison
+tsne_default = TSNE(n_components=2, random_state=42)
+X_default = data_no_outliers_norm[FEATURES]
+y_default = data_no_outliers_norm['label']
+X_tsne_default = tsne_default.fit_transform(X_default)
+df_tsne_default = pd.DataFrame(X_tsne_default, columns=['Dim1', 'Dim2'])
+df_tsne_default['label'] = y_default.values
+plt.figure(figsize=(8, 6))
+for label in sorted(df_tsne_default['label'].unique()):
+    subset = df_tsne_default[df_tsne_default['label'] == label]
+    plt.scatter(subset['Dim1'], subset['Dim2'], label=f'Label {label}', alpha=0.7)
+kl_div_default = tsne_default.kl_divergence_
+plt.title(f't-SNE (default parameters)\nKL={kl_div_default:.2f}')
+plt.xlabel('Dimension 1')
+plt.ylabel('Dimension 2')
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.show()
+print("\nt-SNE embedding (default parameters):")
+print(df_tsne_default.head())
+print(f"KL Divergence: {kl_div_default:.4f}")
