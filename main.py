@@ -2,203 +2,195 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from itertools import combinations
 
-# Load sampled datasets
-dfs = []
-for label in [0, 1, 2]:
-    df = pd.read_csv(f"sampled_label_{label}.csv")
-    df['label'] = label
-    dfs.append(df)
-data = pd.concat(dfs, ignore_index=True)
+FEATURES = ["RR_l_0", "RR_l_0/RR_l_1", "RR_r_0", "R_val", "P_val", "signal_std"]
+LABELS = [0, 1, 2]
 
-features = ["RR_l_0", "RR_l_0/RR_l_1", "RR_r_0", "R_val", "P_val", "signal_std"]
+def load_data():
+    dfs = []
+    for label in LABELS:
+        df = pd.read_csv(f"sampled_label_{label}.csv")
+        df['label'] = label
+        dfs.append(df)
+    return pd.concat(dfs, ignore_index=True)
 
-# 1. Descriptive statistics for data with missing values
-print("Descriptive statistics for data with missing values:")
-desc_missing = data[features].describe().T
-desc_missing["median"] = data[features].median()
-desc_missing["dispersion"] = data[features].var()
-print(desc_missing)
+def get_stats(data, name=""):
+    stats = data[FEATURES].describe().T
+    stats["median"] = data[FEATURES].median()
+    stats["dispersion"] = data[FEATURES].var()
+    if name:
+        print(f"\nDescriptive statistics for {name}:")
+        print(stats)
+    return stats
 
-# 2. Fill missing data using mean and median per label, and compare
-# Fill with mean per label
-data_filled_mean = data.copy()
-for feature in features:
-    data_filled_mean[feature] = data.groupby("label")[feature].transform(lambda x: x.fillna(x.mean()))
+def fill_missing_values(data, method='median'):
+    data_filled = data.copy()
+    for feature in FEATURES:
+        if method == 'mean':
+            data_filled[feature] = data.groupby("label")[feature].transform(lambda x: x.fillna(x.mean()))
+        else:
+            data_filled[feature] = data.groupby("label")[feature].transform(lambda x: x.fillna(x.median()))
+    return data_filled
 
-# Fill with median per label
-data_filled_median = data.copy()
-for feature in features:
-    data_filled_median[feature] = data.groupby("label")[feature].transform(lambda x: x.fillna(x.median()))
+def remove_outliers(data):
+    Q1 = data[FEATURES].quantile(0.25)
+    Q3 = data[FEATURES].quantile(0.75)
+    IQR = Q3 - Q1
+    
+    lower_bound = Q1 - 3 * IQR
+    upper_bound = Q3 + 3 * IQR
+    
+    mask = ~((data[FEATURES] < lower_bound) | (data[FEATURES] > upper_bound)).any(axis=1)
+    return data[mask]
 
-print("\nDescriptive statistics after filling missing values with MEAN (per label):")
-desc_mean = data_filled_mean[features].describe().T
-desc_mean["median"] = data_filled_mean[features].median()
-desc_mean["dispersion"] = data_filled_mean[features].var()
-print(desc_mean)
+def normalize_data(data, method='minmax'):
+    data_normalized = data.copy()
+    
+    for feature in FEATURES:
+        if method == 'minmax':
+            x_min = data[feature].min()
+            x_max = data[feature].max()
+            data_normalized[feature] = (data[feature] - x_min) / (x_max - x_min)
+        else: 
+            x_mean = data[feature].mean()
+            x_std = data[feature].std()
+            data_normalized[feature] = (data[feature] - x_mean) / x_std
+    
+    return data_normalized
 
-print("\nDescriptive statistics after filling missing values with MEDIAN (per label):")
-desc_median = data_filled_median[features].describe().T
-desc_median["median"] = data_filled_median[features].median()
-desc_median["dispersion"] = data_filled_median[features].var()
-print(desc_median)
+def plot_scatter_matrix(data):
+    plt.figure(figsize=(18, 18))
+    num_features = len(FEATURES)
+    
+    for i in range(num_features):
+        for j in range(i + 1):
+            plt.subplot(num_features, num_features, i * num_features + j + 1)
 
-# --- Continue with the rest of your pipeline using mean-imputed data ---
-data_filled = data_filled_median
+            if i != j:
+                for label in LABELS:
+                    subset = data[data['label'] == label]
+                    plt.scatter(subset[FEATURES[j]], subset[FEATURES[i]], 
+                    label=f"Label {label}" if (i == 1 and j == 0) else "", alpha=0.6)
 
-# Calculate Q1, Q3, and IQR
-Q1 = data_filled.quantile(0.25)
-Q3 = data_filled.quantile(0.75)
-IQR = Q3 - Q1
+            plt.ylabel(FEATURES[i] if j == 0 else "")
+            plt.xlabel(FEATURES[j] if i == num_features - 1 else "")
+    
+    plt.suptitle("Scatter Plot Matrix (Lower Triangle, Outliers Removed)", y=1)
+    plt.show()
 
-# Define the outer barriers
-lower_bound = Q1 - 3 * IQR
-upper_bound = Q3 + 3 * IQR
+def plot_boxplots(data, title_suffix=""):
+    plt.figure(figsize=(15, 8))
+    palette = sns.color_palette("Set2", n_colors=len(LABELS))
+    
+    for i, feature in enumerate(FEATURES):
+        plt.subplot(2, 3, i+1)
+        sns.boxplot(x="label", y=feature, data=data, palette=palette)
+        plt.title(f"Boxplot of {feature} by Label")
+    
+    plt.suptitle(f"Box Plots {title_suffix}", y=1.02)
+    plt.tight_layout()
+    plt.show()
 
-# Create a mask to filter out extreme outliers
-mask = ~((data_filled < lower_bound) | (data_filled > upper_bound)).any(axis=1)
+def plot_histograms(data):
+    plt.figure(figsize=(15, 8))
+    
+    for i, feature in enumerate(FEATURES):
+        plt.subplot(2, 3, i+1)
+        for label in LABELS:
+            subset = data[data['label'] == label]
+            sns.histplot(subset[feature], label=f"Label {label}", 
+                        kde=True, stat="density", element="step", fill=False)
+        plt.title(f"Histogram of {feature}")
+        plt.legend()
+    
+    plt.tight_layout()
+    plt.show()
 
-# Apply the mask to the data
-data_no_outliers = data_filled[mask]
+def plot_correlation_heatmaps(data):
+    fig, axes = plt.subplots(len(LABELS), 1, figsize=(7, 6 * len(LABELS))) 
+    if len(LABELS) == 1:
+        axes = [axes]
+    for idx, label in enumerate(LABELS):
+        corr_label = data[data['label'] == label][FEATURES].corr()
+        sns.heatmap(corr_label, annot=True, cmap="coolwarm", fmt=".2f", ax=axes[idx])
+        axes[idx].set_title(f"Correlation Heatmap (Label {label})")
 
-# Min-max normalization (on data without outliers)
-data_min_max_normalized = data_no_outliers.copy()
-for feature in features:
-    x_min = data_no_outliers[feature].min()
-    x_max = data_no_outliers[feature].max()
-    data_min_max_normalized[feature] = (data_no_outliers[feature] - x_min) / (x_max - x_min)
+    
+    plt.tight_layout()
+    plt.show()
 
-# Normalization by mean and standard deviation (on data without outliers)
-data_standard_normalized = data_no_outliers.copy()
-for feature in features:
-    x_mean = data_no_outliers[feature].mean()
-    x_std = data_no_outliers[feature].std()
-    data_standard_normalized[feature] = (data_no_outliers[feature] - x_mean) / x_std
-
-# Descriptive statistics for the original, filled, and outlier-removed data
-print("\nDescriptive statistics for original data (with missing values filled using median):")
-desc = data_filled[features].describe().T
-desc["median"] = data_filled[features].median()
-desc["dispersion"] = data_filled[features].var()
-print(desc)
-
-print("\nDescriptive statistics after outlier removal:")
-desc_no_out = data_no_outliers[features].describe().T
-desc_no_out["median"] = data_no_outliers[features].median()
-desc_no_out["dispersion"] = data_no_outliers[features].var()
-print(desc_no_out)
-
-print("\nDescriptive statistics for Min-Max normalized data:")
-desc_minmax = data_min_max_normalized[features].describe().T
-desc_minmax["median"] = data_min_max_normalized[features].median()
-desc_minmax["dispersion"] = data_min_max_normalized[features].var()
-print(desc_minmax)
-
-print("\nDescriptive statistics for Standard normalized data:")
-desc_std = data_standard_normalized[features].describe().T
-desc_std["median"] = data_standard_normalized[features].median()
-desc_std["dispersion"] = data_standard_normalized[features].var()
-print(desc_std)
-
-# Visual analysis
-# 1. Scatter plot matrix (full, with diagonal, outliers removed)
-plt.figure(figsize=(18, 18))
-num_features = len(features)
-
-for i in range(num_features):
-    for j in range(num_features):
-        if j > i:  # <-- skip the upper triangle
-            continue
-        plt.subplot(num_features, num_features, i * num_features + j + 1)
+def plot_frequency_charts(data, bins=10):
+    plt.figure(figsize=(15, 10))
+    
+    for i, feature in enumerate(FEATURES):
+        plt.subplot(2, 3, i+1)
         
-        if i == j:
-            # Diagonal: histogram for the feature, colored by label
-            for label in sorted(data_no_outliers['label'].unique()):
-                sns.histplot(
-                    data_no_outliers[data_no_outliers['label'] == label][features[i]],
-                    label=f"Label {label}" if j == 0 else "",
-                    kde=False, stat="count", element="step", fill=True, alpha=0.5
-                )
-            if j == 0:
-                plt.legend()
-        else:
-            # Off-diagonal: scatter plot
-            for label in sorted(data_no_outliers['label'].unique()):
-                plt.scatter(
-                    data_no_outliers[data_no_outliers['label'] == label][features[j]],
-                    data_no_outliers[data_no_outliers['label'] == label][features[i]],
-                    label=f"Label {label}" if (i == 0 and j == 0) else "",
-                    alpha=0.6
-                )
+        for label in LABELS:
+            subset = data[data['label'] == label][feature]
+            counts, bin_edges = np.histogram(subset, bins=bins)
+            bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+            
+            plt.bar(bin_centers, counts, alpha=0.7, 
+                   label=f'Label {label}', width=(bin_edges[1]-bin_edges[0])*0.8)
         
-        if j == 0:
-            plt.ylabel(features[i])
-        else:
-            plt.ylabel("")
-        if i == num_features - 1:
-            plt.xlabel(features[j])
-        else:
-            plt.xlabel("")
+        plt.title(f'Frequency Chart: {feature}')
+        plt.xlabel(feature)
+        plt.ylabel('Count')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+    
+    plt.suptitle('Frequency Charts by Feature and Label', y=1.02)
+    plt.tight_layout()
+    plt.show()
 
-plt.suptitle("Scatter Plot Matrix (Lower Triangle Only, With Diagonal, Outliers Removed)", y=1.02)
-plt.tight_layout(rect=[0, 0, 1, 0.97])
-plt.show()
 
-# 2. Box plots (rectangular plots) for each feature by label, using data WITHOUT outliers
-plt.figure(figsize=(15, 8))
-palette = sns.color_palette("Set2", n_colors=len(data['label'].unique()))
-for i, feature in enumerate(features):
-    plt.subplot(2, 3, i+1)
-    sns.boxplot(x="label", y=feature, data=data_no_outliers, palette=palette)
-    plt.title(f"Boxplot of {feature} by Label")
-plt.suptitle("Data with Removed Outliers", y=1.02)
-plt.tight_layout()
-plt.show()
+def export_summary(stats_dict):
+    import os
+    os.makedirs("summary_tables", exist_ok=True)
+    for sheet_name, stats in stats_dict.items():
+        stats.to_csv(f"summary_tables/{sheet_name}.csv")
 
-# 3. Box plots (rectangular plots) for each feature by label, using data WITH outliers
-plt.figure(figsize=(15, 8))
-palette = sns.color_palette("Set2", n_colors=len(data['label'].unique()))
-for i, feature in enumerate(features):
-    plt.subplot(2, 3, i+1)
-    sns.boxplot(x="label", y=feature, data=data, palette=palette)
-    plt.title(f"Boxplot of {feature} by Label")
-plt.suptitle("Data with Outliers", y=1.02)
-plt.tight_layout()
-plt.show()
+def main():
+    print("Loading data...")
+    data = load_data()
+    
+    stats_missing = get_stats(data, "data with missing values")
+    
+    data_mean = fill_missing_values(data, 'mean')
+    data_median = fill_missing_values(data, 'median')
+    
+    stats_mean = get_stats(data_mean, "mean imputed data")
+    stats_median = get_stats(data_median, "median imputed data")
+    
+    data_filled = data_median
+    stats_filled = get_stats(data_filled, "filled data")
+    
+    data_clean = remove_outliers(data_filled)
+    stats_clean = get_stats(data_clean, "data after outlier removal")
 
-# 3. Histograms for each feature, separated by label
-plt.figure(figsize=(15, 8))
-for i, feature in enumerate(features):
-    plt.subplot(2, 3, i+1)
-    for label in sorted(data_no_outliers['label'].unique()):
-        sns.histplot(
-            data_no_outliers[data_no_outliers['label'] == label][feature],
-            label=f"Label {label}", kde=True, stat="density", element="step", fill=False
-        )
-    plt.title(f"Histogram of {feature}")
-    plt.legend()
-plt.tight_layout()
-plt.show()
+    data_minmax = normalize_data(data_clean, 'minmax')
+    data_standard = normalize_data(data_clean, 'standard')
+    
+    stats_minmax = get_stats(data_minmax, "Min-Max normalized data")
+    stats_standard = get_stats(data_standard, "Standard normalized data")
+    
+    plot_scatter_matrix(data_clean)
+    plot_boxplots(data_clean, "(Outliers Removed)")
+    plot_boxplots(data_filled, "(With Outliers)")
+    plot_histograms(data_clean)
+    plot_correlation_heatmaps(data_clean)
+    plot_frequency_charts(data_clean)
 
-labels = sorted(data_no_outliers['label'].unique())
-fig, axes = plt.subplots(1, len(labels), figsize=(6 * len(labels), 5))
-if len(labels) == 1:
-    axes = [axes]
-for idx, label in enumerate(labels):
-    corr_label = data_no_outliers[data_no_outliers['label'] == label][features].corr()
-    sns.heatmap(corr_label, annot=True, cmap="coolwarm", fmt=".2f", ax=axes[idx])
-    axes[idx].set_title(f"Correlation Heatmap (Label {label})")
-plt.tight_layout()
-plt.show()
+    stats_dict = {
+        "Missing_Values": stats_missing,
+        "Mean_Imputed": stats_mean,
+        "Median_Imputed": stats_median,
+        "Filled_Data": stats_filled,
+        "No_Outliers": stats_clean,
+        "MinMax_Normalized": stats_minmax,
+        "Standard_Normalized": stats_standard
+    }
+    export_summary(stats_dict)
 
-# Export summary tables to Excel
-with pd.ExcelWriter("summary_tables.xlsx") as writer:
-    desc_missing.to_excel(writer, sheet_name="Missing_Values")
-    desc_mean.to_excel(writer, sheet_name="Mean_Imputed")
-    desc_median.to_excel(writer, sheet_name="Median_Imputed")
-    desc.to_excel(writer, sheet_name="Filled_Data")
-    desc_no_out.to_excel(writer, sheet_name="No_Outliers")
-    desc_minmax.to_excel(writer, sheet_name="MinMax_Normalized")
-    desc_std.to_excel(writer, sheet_name="Standard_Normalized")
-print("Summary tables exported to 'summary_tables.xlsx'")
+if __name__ == "__main__":
+    main()
