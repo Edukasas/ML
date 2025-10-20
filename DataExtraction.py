@@ -4,16 +4,15 @@ import pandas as pd
 file_path = "EKG_pupsniu_analize.csv"
 df = pd.read_csv(file_path, delimiter=';')
 
-# Extract only the specified columns plus 'label'
-columns_to_use = ["RR_l_0", "RR_l_0/RR_l_1", "RR_r_0", "R_val", "P_val", "signal_std", "label"]
-df_selected = df[columns_to_use]
+# Use all columns (no filtering)
+df_selected = df.copy()
 
 # Randomly select 500 rows for each label (0, 1, 2)
 for label in [0, 1, 2]:
     df_label = df_selected[df_selected['label'] == label].sample(n=500, random_state=42)
     output_file = f"sampled_label_{label}.csv"
-    # Save only the specified columns (excluding 'label' if you don't want it in the output)
-    df_label[["RR_l_0", "RR_l_0/RR_l_1", "RR_r_0", "R_val", "P_val", "signal_std"]].to_csv(output_file, index=False)
+    # Save all columns (including 'label')
+    df_label.to_csv(output_file, index=False)
     print(f"Saved 500 random rows for label {label} to {output_file}")
 
 # Data quality check for missing data

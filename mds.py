@@ -46,6 +46,10 @@ def normalize_features(df):
     
     return df_normalized
 
+def filter_six_features(df):
+    available = [col for col in FEATURE_COLUMNS if col in df.columns]
+    return df[available].copy()
+
 
 def detect_outliers_iqr(X, multiplier=3.0):
     outlier_mask = np.zeros(len(X), dtype=bool)
@@ -245,6 +249,10 @@ def main():
     print("Running MDS with normalization")
     print("=" * 70)
     data = normalize_features(data)
+    normalize = run_mds_default(data[FEATURE_COLUMNS], data['label'])
+    plot_mds_results_no_outliers(normalize, data['label'])
+
+    data = filter_six_features(data);
     normalize = run_mds_default(data[FEATURE_COLUMNS], data['label'])
     plot_mds_results_no_outliers(normalize, data['label'])
 
