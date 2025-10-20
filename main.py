@@ -88,25 +88,16 @@ def remove_outliers(data):
 
     return cleaned_data, outliers_data, outlier_mask, inner_outlier_mask, outer_outlier_mask
 
-def perform_tsne(data, normalized=False):
+def perform_tsne(data, normalized=False, perplexity=50, metric='euclidean', learning_rate='auto'):
     X = data[FEATURES]
     y = data['label']
     if normalized:
         X = normalize_data(X)
-    tsne = TSNE(n_components=2, perplexity=50, random_state=42)
+    tsne = TSNE(n_components=2, perplexity=perplexity, metric=metric, learning_rate=learning_rate, random_state=42)
     X_tsne = tsne.fit_transform(X)
     df_tsne = pd.DataFrame(X_tsne, columns=['Dim1', 'Dim2'])
     df_tsne['label'] = y.values
-    plt.figure(figsize=(8, 6))
-    for label in sorted(df_tsne['label'].unique()):
-        subset = df_tsne[df_tsne['label'] == label]
-        plt.scatter(subset['Dim1'], subset['Dim2'], label=f'Label {label}', alpha=0.7)
-    plt.title(f't-SNE Visualization ({"Normalized" if normalized else "Raw"} Data)')
-    plt.xlabel('Dimension 1')
-    plt.ylabel('Dimension 2')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.show()
+    return df_tsne, tsne.kl_divergence_
 
 # Load and process data
 data = load_data()
@@ -115,28 +106,16 @@ data_no_outliers, outliers_removed, outlier_mask, inner_outlier_mask, outer_outl
 
 # 1. t-SNE on raw data (no normalization)
 raw_start_time = time.time()
-X_raw = data_filled[FEATURES]
-y_raw = data_filled['label']
-tsne_raw = TSNE(n_components=2, random_state=42)
-X_tsne_raw = tsne_raw.fit_transform(X_raw)
-df_tsne_raw = pd.DataFrame(X_tsne_raw, columns=['Dim1', 'Dim2'])
-df_tsne_raw['label'] = y_raw.values
-kl_div_raw = tsne_raw.kl_divergence_
-trust_raw = trustworthiness(X_raw, X_tsne_raw, n_neighbors=12)
+df_tsne_raw, kl_div_raw = perform_tsne(data_filled, normalized=False)
 raw_calculation_time = time.time() - raw_start_time
+trust_raw = trustworthiness(data_filled[FEATURES], df_tsne_raw[['Dim1','Dim2']].values, n_neighbors=12)
 
 # 2. t-SNE on normalized data (default params)
 norm_start_time = time.time()
 data_filled_norm = normalize_data(data_filled)
-X_norm = data_filled_norm[FEATURES]
-y_norm = data_filled_norm['label']
-tsne_norm = TSNE(n_components=2, random_state=42)
-X_tsne_norm = tsne_norm.fit_transform(X_norm)
-df_tsne_norm = pd.DataFrame(X_tsne_norm, columns=['Dim1', 'Dim2'])
-df_tsne_norm['label'] = y_norm.values
-kl_div_norm = tsne_norm.kl_divergence_
-trust_norm = trustworthiness(X_norm, X_tsne_norm, n_neighbors=12)
+df_tsne_norm, kl_div_norm = perform_tsne(data_filled, normalized=True)
 norm_calculation_time = time.time() - norm_start_time
+trust_norm = trustworthiness(data_filled_norm[FEATURES], df_tsne_norm[['Dim1','Dim2']].values, n_neighbors=12)
 
 # 3. Separate graphs for raw and normalized t-SNE with time counting
 
@@ -172,61 +151,30 @@ metrics = ['euclidean', 'cosine', 'manhattan']
 for perplexity in perplexities:
     for metric in metrics:
         start_time = time.time()
-        tsne = TSNE(n_components=2, perplexity=perplexity, metric=metric, random_state=42)
-        X = data_filled_norm[FEATURES]
-        y = data_filled_norm['label']
-        X_tsne = tsne.fit_transform(X)
+        df_tsne, kl_div = perform_tsne(data_filled_norm, normalized=False, perplexity=perplexity, metric=metric, learning_rate='auto')
         elapsed_time = time.time() - start_time
-        df_tsne = pd.DataFrame(X_tsne, columns=['Dim1', 'Dim2'])
-        df_tsne['label'] = y.values
-
-        # Get outlier masks
-        _, _, outlier_mask, inner_outlier_mask, outer_outlier_mask = remove_outliers(data_filled)
         df_tsne['is_outer_outlier'] = outer_outlier_mask.values
-        df_tsne['is_inner_outlier'] = inner_outlier_mask.values & ~outer_outlier_mask.values  # Only inner, not outer
-
-        # Calculate trustworthiness
-        trust = trustworthiness(X, X_tsne, n_neighbors=12)
-
+        df_tsne['is_inner_outlier'] = inner_outlier_mask.values & ~outer_outlier_mask.values
+        trust = trustworthiness(data_filled_norm[FEATURES], df_tsne[['Dim1','Dim2']].values, n_neighbors=12)
         plt.figure(figsize=(10, 8))
         colors = ['blue', 'orange', 'green']
-
         for i, label in enumerate(sorted(df_tsne['label'].unique())):
             subset = df_tsne[df_tsne['label'] == label]
             color = colors[i]
-
-            # Normal points (not inner or outer)
             normal_points = subset[~subset['is_inner_outlier'] & ~subset['is_outer_outlier']]
-            # Inner outliers (not outer)
             inner_points = subset[subset['is_inner_outlier']]
-            # Outer outliers
             outer_points = subset[subset['is_outer_outlier']]
-
-            # Plot normal points as circles
             if len(normal_points) > 0:
-                plt.scatter(normal_points['Dim1'], normal_points['Dim2'],
-                            c=color, alpha=0.7, marker='o', s=50)
-
-            # Plot inner outliers as squares
+                plt.scatter(normal_points['Dim1'], normal_points['Dim2'], c=color, alpha=0.7, marker='o', s=50)
             if len(inner_points) > 0:
-                plt.scatter(inner_points['Dim1'], inner_points['Dim2'],
-                            c=color, alpha=0.9, marker='s', s=80,
-                            edgecolors='black', linewidth=1)
-
-            # Plot outer outliers as triangles
+                plt.scatter(inner_points['Dim1'], inner_points['Dim2'], c=color, alpha=0.9, marker='s', s=80, edgecolors='black', linewidth=1)
             if len(outer_points) > 0:
-                plt.scatter(outer_points['Dim1'], outer_points['Dim2'],
-                            c=color, alpha=0.9, marker='^', s=80,
-                            edgecolors='black', linewidth=1)
-
-        # Legend: 3 circles (normal), 3 squares (inner), 3 triangles (outer)
+                plt.scatter(outer_points['Dim1'], outer_points['Dim2'], c=color, alpha=0.9, marker='^', s=80, edgecolors='black', linewidth=1)
         for i in range(3):
             plt.scatter([], [], c=colors[i], marker='o', s=50, label=f'Label {i} Normal')
             plt.scatter([], [], c=colors[i], marker='s', s=80, edgecolors='black', linewidth=1, label=f'Label {i} Inner Outlier')
             plt.scatter([], [], c=colors[i], marker='^', s=80, edgecolors='black', linewidth=1, label=f'Label {i} Outer Outlier')
-
-        kl_divergence = tsne.kl_divergence_
-        plt.title(f't-SNE (perplexity={perplexity}, metric={metric})\nKL={kl_divergence:.4f} | Trust={trust:.4f}\nTime={elapsed_time:.2f}s')
+        plt.title(f't-SNE (perplexity={perplexity}, metric={metric})\nKL={kl_div:.4f} | Trust={trust:.4f}\nTime={elapsed_time:.2f}s')
         plt.xlabel('Dim1')
         plt.ylabel('Dim2')
         plt.legend()
@@ -234,44 +182,28 @@ for perplexity in perplexities:
         plt.tight_layout()
         plt.show()
 
-# Outlier statistics
     total_points = len(df_tsne)
     total_outliers = outlier_mask.sum()
     total_inner = (inner_outlier_mask & ~outer_outlier_mask).sum()
     total_outer = outer_outlier_mask.sum()
-
     percent_outliers = 100 * total_outliers / total_points
     percent_inner = 100 * total_inner / total_points
     percent_outer = 100 * total_outer / total_points
-
     print(f"Total points: {total_points}")
     print(f"Total outliers: {total_outliers} ({percent_outliers:.2f}%)")
     print(f"  Inner outliers: {total_inner} ({percent_inner:.2f}%)")
     print(f"  Outer outliers: {total_outer} ({percent_outer:.2f}%)")
 
-# 5. Sample Data Analysis - Raw and Normalized t-SNE (ALL FEATURES)
 sample_data = load_data()
-
-
-# Get ALL numeric features (excluding 'label' column)
 if 'label' in sample_data.columns:
-    # Get all numeric columns except 'label'
     numeric_columns = sample_data.select_dtypes(include=[np.number]).columns.tolist()
     if 'label' in numeric_columns:
         numeric_columns.remove('label')
-    
     all_features = numeric_columns
-    
     if len(all_features) > 0:
-        # Prepare sample data with ALL features
+
         sample_data_clean = sample_data[all_features + ['label']].dropna()
         sample_filled = fill_missing_values(sample_data_clean, features=all_features)
-        
-        print(f"Sample Data after cleaning: {len(sample_filled)} samples")
-        print(f"Features with missing values handled: {len(all_features)}")
-        
-        # Sample Raw t-SNE (ALL FEATURES)
-        print("🔵 Running t-SNE on sample raw data (ALL FEATURES)...")
         sample_raw_start = time.time()
         X_sample_raw = sample_filled[all_features]
         y_sample_raw = sample_filled['label']
@@ -280,11 +212,10 @@ if 'label' in sample_data.columns:
         df_tsne_sample_raw = pd.DataFrame(X_tsne_sample_raw, columns=['Dim1', 'Dim2'])
         df_tsne_sample_raw['label'] = y_sample_raw.values
         kl_div_sample_raw = tsne_sample_raw.kl_divergence_
-        trust_sample_raw = trustworthiness(X_sample_raw, X_tsne_sample_raw, n_neighbors=12)
+        trust_sample_raw = trustworthiness(X_sample_raw, df_tsne_sample_raw[['Dim1','Dim2']].values, n_neighbors=12)
         sample_raw_time = time.time() - sample_raw_start
-        
-        # Sample Normalized t-SNE (ALL FEATURES)
-        print("🟢 Running t-SNE on sample normalized data (ALL FEATURES)...")
+
+
         sample_norm_start = time.time()
         sample_normalized = normalize_data(sample_filled, features=all_features)
         X_sample_norm = sample_normalized[all_features]
@@ -294,10 +225,10 @@ if 'label' in sample_data.columns:
         df_tsne_sample_norm = pd.DataFrame(X_tsne_sample_norm, columns=['Dim1', 'Dim2'])
         df_tsne_sample_norm['label'] = y_sample_norm.values
         kl_div_sample_norm = tsne_sample_norm.kl_divergence_
-        trust_sample_norm = trustworthiness(X_sample_norm, X_tsne_sample_norm, n_neighbors=12)
+        trust_sample_norm = trustworthiness(X_sample_norm, df_tsne_sample_norm[['Dim1','Dim2']].values, n_neighbors=12)
         sample_norm_time = time.time() - sample_norm_start
+
         
-        # Sample Raw data graph (ALL FEATURES)
         plt.figure(figsize=(10, 8))
         for label in sorted(df_tsne_sample_raw['label'].unique()):
             subset = df_tsne_sample_raw[df_tsne_sample_raw['label'] == label]
@@ -309,8 +240,6 @@ if 'label' in sample_data.columns:
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.show()
-        
-        # Sample Normalized data graph (ALL FEATURES)
         plt.figure(figsize=(10, 8))
         for label in sorted(df_tsne_sample_norm['label'].unique()):
             subset = df_tsne_sample_norm[df_tsne_sample_norm['label'] == label]
@@ -322,9 +251,7 @@ if 'label' in sample_data.columns:
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.show()
-
-        
     else:
-        print("❌ No numeric features found in sample data")
+        print("No numeric features found in sample data")
 else:
-    print("❌ 'label' column not found in sample data")
+    print("'label' column not found in sample data")
