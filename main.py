@@ -118,3 +118,17 @@ results = evaluate_clusters_libs(data_normal, FEATURES, k_min=2, k_max=10, rando
 print("Optimal k:", results.get("optimal_k"))
 print("Elbow table:\n", results["elbow"].head())
 
+numeric_columns = data_load.select_dtypes(include=[np.number]).columns.tolist()
+if 'label' in numeric_columns:
+    numeric_columns.remove('label')
+    all_features = numeric_columns
+
+
+    data_filled = fill_missing_values(data_load, features=all_features)
+
+
+    if len(all_features) > 0:
+        results = evaluate_clusters_libs(data_filled, all_features, k_min=2, k_max=10, random_state=42, excel_path="cluster_selection.xlsx")
+
+print("Optimal k:", results.get("optimal_k"))
+print("Elbow table:\n", results["elbow"].head())
