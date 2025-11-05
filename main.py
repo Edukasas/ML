@@ -140,8 +140,8 @@ def main():
     print("Elbow table (all features):\n", results_all["elbow"].head())
 
     # clusterize both datasets with their respective optimal k (fallback 3)
-    opt_k_sel = int(results_selected.get("optimal_k")) if results_selected.get("optimal_k") is not None else 3
-    opt_k_all = int(results_all.get("optimal_k")) if results_all.get("optimal_k") is not None else 3
+    opt_k_sel = int(results_selected.get("optimal_k"))
+    opt_k_all = int(results_all.get("optimal_k"))
 
     X_sel = data_normal[FEATURES].values
     X_all = data_normal_all[all_features].values
@@ -155,17 +155,16 @@ def main():
     sizes_sel = dict(enumerate(np.bincount(kmeans_sel.labels_)))
     sizes_all = dict(enumerate(np.bincount(kmeans_all.labels_)))
 
-    sil_sel = silhouette_score(X_sel, kmeans_sel.labels_) if opt_k_sel > 1 else float('nan')
-    sil_all = silhouette_score(X_all, kmeans_all.labels_) if opt_k_all > 1 else float('nan')
+    sil_sel = silhouette_score(X_sel, kmeans_sel.labels_)
+    sil_all = silhouette_score(X_all, kmeans_all.labels_)
 
     print(f"KMeans (selected FEATURES) k={opt_k_sel} sizes={sizes_sel} inertia={kmeans_sel.inertia_} silhouette={sil_sel}")
     print(f"KMeans (all features)      k={opt_k_all} sizes={sizes_all} inertia={kmeans_all.inertia_} silhouette={sil_all}")
 
     # save results
     data_normal.to_csv("data_normal_clustered_selected_features.csv", index=False)
-    data_normal_all.to_csv("data_normal_clustered_all_features.csv", index=False)
-    pd.DataFrame(kmeans_sel.cluster_centers_, columns=FEATURES).to_csv("kmeans_centers_selected_features.csv", index_label="cluster")
-    pd.DataFrame(kmeans_all.cluster_centers_, columns=all_features).to_csv("kmeans_centers_all_features.csv", index_label="cluster")
+    # pd.DataFrame(kmeans_sel.cluster_centers_, columns=FEATURES).to_csv("kmeans_centers_selected_features.csv", index_label="cluster")
+    # pd.DataFrame(kmeans_all.cluster_centers_, columns=all_features).to_csv("kmeans_centers_all_features.csv", index_label="cluster")
 
     # compute 2D embeddings for visualization
     tsne_sel = TSNE(n_components=2, random_state=42, perplexity=50)
@@ -187,18 +186,18 @@ def main():
     results_clean_selected = evaluate_clusters_libs(cleaned_sel, FEATURES, k_min=2, k_max=10, random_state=42, excel_path="cluster_selection_cleaned_selected.xlsx")
     print("Optimal k (selected features) on cleaned data:", results_clean_selected.get("optimal_k"))
     print("Elbow table (selected features, cleaned):\n", results_clean_selected["elbow"].head())
-
+    opt_k_sel_new = int(results_clean_selected.get("optimal_k"))
     # prepare cleaned arrays for assignment/re-fit
     X_clean = cleaned_sel[FEATURES].values
 
     # assign cleaned points to original clusters (predict) and compute silhouette
     labels_clean_pred = kmeans_sel.predict(X_clean)
-    silhouette_predict = silhouette_score(X_clean, labels_clean_pred) if len(np.unique(labels_clean_pred)) > 1 else float('nan')
+    silhouette_predict = silhouette_score(X_clean, labels_clean_pred)
 
     # recompute clustering on cleaned data (fit) and compute silhouette
-    kmeans_clean_recomputed = KMeans(n_clusters=opt_k_sel, random_state=42, n_init=10).fit(X_clean)
+    kmeans_clean_recomputed = KMeans(n_clusters=opt_k_sel_new, random_state=42, n_init=10).fit(X_clean)
     labels_clean_recomputed = kmeans_clean_recomputed.labels_
-    sil_clean_recomputed = silhouette_score(X_clean, labels_clean_recomputed) if opt_k_sel > 1 else float('nan')
+    sil_clean_recomputed = silhouette_score(X_clean, labels_clean_recomputed)
 
     # t-SNE for cleaned data (for both predict and recomputed visualizations we'll use same embedding)
     tsne_clean = TSNE(n_components=2, random_state=42, perplexity=50)
@@ -207,6 +206,11 @@ def main():
     df_tsne_clean['cluster_pred'] = labels_clean_pred
     df_tsne_clean['cluster_recomputed'] = labels_clean_recomputed
     df_tsne_clean['label'] = cleaned_sel['label'].values
+
+
+
+    # save cleaned selected data and its t-SNE embedding for convenience
+    cleaned_sel.to_csv("cleaned_selected_features.csv", index=False)
 
     # First figure: selected FEATURES with outliers highlighted and all-features plot (no outliers overlay)
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
@@ -250,7 +254,7 @@ def main():
     # Second figure: cleaned data - left = assignment-to-original-clusters (predict), right = recomputed (fit)
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     ax = axes[0]
-    ax.set_title(f"Assigned to original KMeans (predict) k={opt_k_sel}\nSilhouette={silhouette_predict:.4f}")
+    ax.set_title(f"Assigned to original KMeans (predict) k={opt_k_sel_new}\nSilhouette={silhouette_predict:.4f}")
     for c in sorted(df_tsne_clean['cluster_pred'].unique()):
         sub = df_tsne_clean[df_tsne_clean['cluster_pred'] == c]
         ax.scatter(sub['Dim1'], sub['Dim2'], s=30, color=colors(c % 10), label=f"cluster {c}", alpha=0.7)
@@ -258,7 +262,7 @@ def main():
     ax.legend(loc='best', fontsize='small')
 
     ax = axes[1]
-    ax.set_title(f"Recomputed on cleaned data (fit) k={opt_k_sel}\nSilhouette={sil_clean_recomputed:.4f}")
+    ax.set_title(f"Recomputed on cleaned data (fit) k={opt_k_sel_new}\nSilhouette={sil_clean_recomputed:.4f}")
     for c in sorted(df_tsne_clean['cluster_recomputed'].unique()):
         sub = df_tsne_clean[df_tsne_clean['cluster_recomputed'] == c]
         ax.scatter(sub['Dim1'], sub['Dim2'], s=30, color=colors(c % 10), label=f"cluster {c}", alpha=0.7)
@@ -268,9 +272,7 @@ def main():
     plt.tight_layout()
     plt.show()
 
-    print(f"Recomputed KMeans on cleaned data: k={opt_k_sel}, inertia={kmeans_clean_recomputed.inertia_:.4f}, silhouette={sil_clean_recomputed:.4f}")
-    pd.DataFrame(kmeans_clean_recomputed.cluster_centers_, columns=FEATURES).to_csv("kmeans_centers_cleaned_recomputed.csv", index_label="cluster")
-
+    print(f"Recomputed KMeans on cleaned data: k={opt_k_sel_new}, inertia={kmeans_clean_recomputed.inertia_:.4f}, silhouette={sil_clean_recomputed:.4f}")
 
 if __name__ == "__main__":
     main()
