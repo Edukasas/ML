@@ -17,37 +17,33 @@ def load_data():
         dfs.append(df)
     return pd.concat(dfs, ignore_index=True)
 
-def fill_missing_values(data, method='median', features=FEATURES):
-    """Fill missing values for specified features (defaults to FEATURES)"""
-    data_filled = data.copy()
+def fill_missing_values(df, features=None):
+    df_filled = df.copy()
+    
+    if features is None:
+        features = [col for col in df_filled.select_dtypes(include=[np.number]).columns if col != 'label']
+    
     for feature in features:
-        if feature in data.columns:
-            if method == 'mean':
-                if 'label' in data.columns:
-                    data_filled[feature] = data.groupby("label")[feature].transform(lambda x: x.fillna(x.mean()))
-                else:
-                    data_filled[feature] = data_filled[feature].fillna(data_filled[feature].mean())
-            else:
-                if 'label' in data.columns:
-                    data_filled[feature] = data.groupby("label")[feature].transform(lambda x: x.fillna(x.median()))
-                else:
-                    data_filled[feature] = data_filled[feature].fillna(data_filled[feature].median())
-    return data_filled
+        if feature in df_filled.columns:
+            df_filled[feature] = df_filled.groupby("label")[feature].transform(
+                lambda x: x.fillna(x.median())
+            )
+    
+    return df_filled
 
 def normalize_data(data, method='minmax', features=FEATURES):
-    """Normalize data for specified features (defaults to FEATURES)"""
     data_normalized = data.copy()
     for feature in features:
         if feature in data.columns:
             if method == 'minmax':
                 x_min = data[feature].min()
                 x_max = data[feature].max()
-                if x_max != x_min:  # Avoid division by zero
+                if x_max != x_min:
                     data_normalized[feature] = (data[feature] - x_min) / (x_max - x_min)
             else: 
                 x_mean = data[feature].mean()
                 x_std = data[feature].std()
-                if x_std != 0:  # Avoid division by zero
+                if x_std != 0:
                     data_normalized[feature] = (data[feature] - x_mean) / x_std
     return data_normalized
 
