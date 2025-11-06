@@ -172,6 +172,43 @@ def fit_kmeans(df, features, k):
 # VISUALIZATION
 # ============================================================================
 
+def plot_label_distribution_in_clusters(df, kmeans, title="Label Distribution in Clusters"):
+    """Plot bar chart showing how original labels are distributed across clusters."""
+    # Create a DataFrame with cluster and label info
+    cluster_label_counts = pd.crosstab(kmeans.labels_, df['label'])
+    
+    # Create the plot
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    
+    # Plot 1: Stacked bar chart
+    cluster_label_counts.plot(kind='bar', stacked=True, ax=axes[0], 
+                             color=['#1f77b4', '#ff7f0e', '#2ca02c'])
+    axes[0].set_xlabel('Cluster')
+    axes[0].set_ylabel('Number of Samples')
+    axes[0].set_title(f'{title} - Stacked')
+    axes[0].legend(title='Original Label', labels=[f'Label {i}' for i in LABELS])
+    axes[0].set_xticklabels(axes[0].get_xticklabels(), rotation=0)
+    
+    # Plot 2: Grouped bar chart
+    cluster_label_counts.plot(kind='bar', ax=axes[1], 
+                             color=['#1f77b4', '#ff7f0e', '#2ca02c'])
+    axes[1].set_xlabel('Cluster')
+    axes[1].set_ylabel('Number of Samples')
+    axes[1].set_title(f'{title} - Grouped')
+    axes[1].legend(title='Original Label', labels=[f'Label {i}' for i in LABELS])
+    axes[1].set_xticklabels(axes[1].get_xticklabels(), rotation=0)
+    
+    plt.tight_layout()
+    plt.savefig(f"{title.lower().replace(' ', '_')}.png", bbox_inches='tight', dpi=100)
+    plt.show()
+    
+    # Print detailed statistics
+    print(f"\n{title}:")
+    print("="*70)
+    print(cluster_label_counts)
+    print("\nPercentage distribution:")
+    print((cluster_label_counts.div(cluster_label_counts.sum(axis=1), axis=0) * 100).round(2))
+
 
 def plot_metrics(metrics_df, title, elbow_k=None, empirical_k=None, prefix=""):
     """Plot elbow and silhouette curves with empirical k marked."""
@@ -461,6 +498,14 @@ def main():
     plot_cleaned_comparison(tsne_clean, labels_pred, kmeans_recomp.labels_,
                            data_filled, FEATURES,
                            opt_k_clean, sil_pred, metrics_recomp['silhouette'])
+    
+
+    # Label distribution and statistics
+    print("\nLabel distribution in clusters (original data):")
+    plot_label_distribution_in_clusters(data_sel, kmeans_sel, "Original Data - Label Distribution")
+    
+    print("\nLabel distribution in cleaned data:")
+    plot_label_distribution_in_clusters(data_cleaned, kmeans_recomp, "Cleaned Data - Label Distribution")
     
     # Save results
     data_sel['cluster'] = kmeans_sel.labels_
