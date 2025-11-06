@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
 
 
 FEATURES = ["RR_l_0", "RR_l_0/RR_l_1", "RR_r_0", "R_val", "P_val", "signal_std"]
@@ -91,17 +91,24 @@ def compute_empirical_k(m):
 
 
 def compute_clustering_metrics(df, features, k_range=K_RANGE):
-    """Compute inertia and silhouette scores for range of k values."""
+    """Compute inertia, silhouette, Davies-Bouldin and Calinski-Harabasz scores."""
     X = df[features].values
     results = []
     
     for k in k_range:
         km = KMeans(n_clusters=k, random_state=42, n_init=10).fit(X)
         sil = silhouette_score(X, km.labels_) if k > 1 else np.nan
-        results.append({'k': k, 'inertia': km.inertia_, 'silhouette': sil})
+        db = davies_bouldin_score(X, km.labels_) if k > 1 else np.nan
+        ch = calinski_harabasz_score(X, km.labels_) if k > 1 else np.nan
+        results.append({
+            'k': k, 
+            'inertia': km.inertia_, 
+            'silhouette': sil,
+            'davies_bouldin': db,
+            'calinski_harabasz': ch
+        })
     
     return pd.DataFrame(results)
-
 
 def find_elbow_k(metrics_df):
     """Find elbow point using perpendicular distance to line method."""
@@ -162,10 +169,18 @@ def fit_kmeans(df, features, k):
     X = df[features].values
     km = KMeans(n_clusters=k, random_state=42, n_init=10).fit(X)
     sil = silhouette_score(X, km.labels_)
+    db = davies_bouldin_score(X, km.labels_)
+    ch = calinski_harabasz_score(X, km.labels_)
     counts = np.bincount(km.labels_)
     sizes = {int(i): int(v) for i, v in enumerate(counts)}
     
-    return km, {'silhouette': sil, 'inertia': km.inertia_, 'sizes': sizes}
+    return km, {
+        'silhouette': sil, 
+        'davies_bouldin': db,
+        'calinski_harabasz': ch,
+        'inertia': km.inertia_, 
+        'sizes': sizes
+    }
 
 
 # ============================================================================
@@ -211,38 +226,64 @@ def plot_label_distribution_in_clusters(df, kmeans, title="Label Distribution in
 
 
 def plot_metrics(metrics_df, title, elbow_k=None, empirical_k=None, prefix=""):
-    """Plot elbow and silhouette curves with empirical k marked."""
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    """Plot elbow, silhouette, Davies-Bouldin and Calinski-Harabasz curves."""
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     
     # Elbow plot
-    axes[0].plot(metrics_df['k'], metrics_df['inertia'], '-o')
+    axes[0, 0].plot(metrics_df['k'], metrics_df['inertia'], '-o')
     if elbow_k:
         y = metrics_df.loc[metrics_df['k'] == elbow_k, 'inertia'].values[0]
-        axes[0].scatter([elbow_k], [y], color='red', s=100, zorder=5, label=f'Elbow k={elbow_k}')
-        axes[0].annotate(f"Elbow\nk={elbow_k}", (elbow_k, y), 
+        axes[0, 0].scatter([elbow_k], [y], color='red', s=100, zorder=5)
+        axes[0, 0].annotate(f"k={elbow_k}", (elbow_k, y), 
                         xytext=(10, -10), textcoords="offset points", ha='left')
     if empirical_k:
         y = metrics_df.loc[metrics_df['k'] == empirical_k, 'inertia'].values[0]
-        axes[0].scatter([empirical_k], [y], color='green', s=100, marker='^', zorder=5, label=f'Empirical k={empirical_k}')
-        axes[0].annotate(f"Empirical\nk={empirical_k}", (empirical_k, y), 
+        axes[0, 0].scatter([empirical_k], [y], color='green', s=100, marker='^', zorder=5)
+        axes[0, 0].annotate(f"k={empirical_k}", (empirical_k, y), 
                         xytext=(10, 10), textcoords="offset points", ha='left')
-    axes[0].set_xlabel('k')
-    axes[0].set_ylabel('Inertia')
-    axes[0].set_title(f"{title} - Elbow Method")
-    axes[0].legend()
+    axes[0, 0].set_xlabel('k')
+    axes[0, 0].set_ylabel('Inertia')
+    axes[0, 0].set_title(f"{title} - Elbow Method")
+    axes[0, 0].grid(True, alpha=0.3)
     
     # Silhouette plot
-    axes[1].plot(metrics_df['k'], metrics_df['silhouette'], '-o')
+    axes[0, 1].plot(metrics_df['k'], metrics_df['silhouette'], '-o', color='tab:orange')
     if elbow_k:
         y = metrics_df.loc[metrics_df['k'] == elbow_k, 'silhouette'].values[0]
-        axes[1].scatter([elbow_k], [y], color='red', s=100, zorder=5, label=f'Elbow k={elbow_k}')
+        axes[0, 1].scatter([elbow_k], [y], color='red', s=100, zorder=5)
     if empirical_k:
         y = metrics_df.loc[metrics_df['k'] == empirical_k, 'silhouette'].values[0]
-        axes[1].scatter([empirical_k], [y], color='green', s=100, marker='^', zorder=5, label=f'Empirical k={empirical_k}')
-    axes[1].set_xlabel('k')
-    axes[1].set_ylabel('Silhouette Score')
-    axes[1].set_title(f"{title} - Silhouette Score")
-    axes[1].legend()
+        axes[0, 1].scatter([empirical_k], [y], color='green', s=100, marker='^', zorder=5)
+    axes[0, 1].set_xlabel('k')
+    axes[0, 1].set_ylabel('Silhouette Score (higher is better)')
+    axes[0, 1].set_title(f"{title} - Silhouette Score")
+    axes[0, 1].grid(True, alpha=0.3)
+    
+    # Davies-Bouldin plot
+    axes[1, 0].plot(metrics_df['k'], metrics_df['davies_bouldin'], '-o', color='tab:red')
+    if elbow_k:
+        y = metrics_df.loc[metrics_df['k'] == elbow_k, 'davies_bouldin'].values[0]
+        axes[1, 0].scatter([elbow_k], [y], color='red', s=100, zorder=5)
+    if empirical_k:
+        y = metrics_df.loc[metrics_df['k'] == empirical_k, 'davies_bouldin'].values[0]
+        axes[1, 0].scatter([empirical_k], [y], color='green', s=100, marker='^', zorder=5)
+    axes[1, 0].set_xlabel('k')
+    axes[1, 0].set_ylabel('Davies-Bouldin Score (lower is better)')
+    axes[1, 0].set_title(f"{title} - Davies-Bouldin Index")
+    axes[1, 0].grid(True, alpha=0.3)
+    
+    # Calinski-Harabasz plot
+    axes[1, 1].plot(metrics_df['k'], metrics_df['calinski_harabasz'], '-o', color='tab:green')
+    if elbow_k:
+        y = metrics_df.loc[metrics_df['k'] == elbow_k, 'calinski_harabasz'].values[0]
+        axes[1, 1].scatter([elbow_k], [y], color='red', s=100, zorder=5)
+    if empirical_k:
+        y = metrics_df.loc[metrics_df['k'] == empirical_k, 'calinski_harabasz'].values[0]
+        axes[1, 1].scatter([empirical_k], [y], color='green', s=100, marker='^', zorder=5)
+    axes[1, 1].set_xlabel('k')
+    axes[1, 1].set_ylabel('Calinski-Harabasz Score (higher is better)')
+    axes[1, 1].set_title(f"{title} - Calinski-Harabasz Index")
+    axes[1, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
     plt.savefig(f"{prefix}_metrics.png", bbox_inches='tight', dpi=100)
@@ -392,8 +433,9 @@ def main():
     
     kmeans_sel, metrics_sel_final = fit_kmeans(data_sel, FEATURES, opt_k_sel)
     print(f"Silhouette: {metrics_sel_final['silhouette']:.4f}")
+    print(f"Davies-Bouldin: {metrics_sel_final['davies_bouldin']:.4f} (lower is better)")
+    print(f"Calinski-Harabasz: {metrics_sel_final['calinski_harabasz']:.2f} (higher is better)")
     print(f"Cluster sizes: {metrics_sel_final['sizes']}")
-    
     # ========================================================================
     # ANALYSIS 2: All FEATURES
     # ========================================================================
@@ -426,8 +468,10 @@ def main():
     plot_metrics(metrics_all, "All Features", elbow_k_all, empirical_k_all, "all")
     
     kmeans_all, metrics_all_final = fit_kmeans(data_all, all_features, opt_k_all)
-    print(f"Silhouette: {metrics_all_final['silhouette']:.4f}")
-    print(f"Cluster sizes: {metrics_all_final['sizes']}")
+    print(f"Silhouette: {metrics_sel_final['silhouette']:.4f}")
+    print(f"Davies-Bouldin: {metrics_sel_final['davies_bouldin']:.4f} (lower is better)")
+    print(f"Calinski-Harabasz: {metrics_sel_final['calinski_harabasz']:.2f} (higher is better)")
+    print(f"Cluster sizes: {metrics_sel_final['sizes']}")
     
     # ========================================================================
     # VISUALIZATION: Comparison Plot
@@ -491,9 +535,11 @@ def main():
     kmeans_recomp, metrics_recomp = fit_kmeans(data_cleaned, FEATURES, opt_k_clean)
     
     print(f"\nAssigned to original: Silhouette={sil_pred:.4f}")
-    print(f"Recomputed: Silhouette={metrics_recomp['silhouette']:.4f}")
-    print(f"Recomputed cluster sizes: {metrics_recomp['sizes']}")
-    
+    print(f"Silhouette: {metrics_sel_final['silhouette']:.4f}")
+    print(f"Davies-Bouldin: {metrics_sel_final['davies_bouldin']:.4f} (lower is better)")
+    print(f"Calinski-Harabasz: {metrics_sel_final['calinski_harabasz']:.2f} (higher is better)")
+    print(f"Cluster sizes: {metrics_sel_final['sizes']}")
+        
     tsne_clean = compute_tsne(data_cleaned, FEATURES)
     plot_cleaned_comparison(tsne_clean, labels_pred, kmeans_recomp.labels_,
                            data_filled, FEATURES,
