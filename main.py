@@ -1,278 +1,477 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE, trustworthiness
-import time
+from sklearn.manifold import TSNE
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 
+
 FEATURES = ["RR_l_0", "RR_l_0/RR_l_1", "RR_r_0", "R_val", "P_val", "signal_std"]
 LABELS = [0, 1, 2]
+K_RANGE = range(2, 30)
+
+
+# Configuration: Set to True to remove outliers before normalization
+REMOVE_OUTLIERS_BEFORE_NORMALIZATION = False
+
+
+# ============================================================================
+# DATA PREPARATION
+# ============================================================================
+
 
 def load_data():
-    dfs = []
-    for label in LABELS:
-        df = pd.read_csv(f"sampled_label_{label}.csv")
-        df['label'] = label
-        dfs.append(df)
+    """Load and combine CSV files for all labels."""
+    dfs = [pd.read_csv(f"sampled_label_{label}.csv").assign(label=label) 
+           for label in LABELS]
     return pd.concat(dfs, ignore_index=True)
 
-def fill_missing_values(data, method='median', features=FEATURES):
-    """Fill missing values for specified features (defaults to FEATURES)"""
-    data_filled = data.copy()
-    for feature in features:
-        if feature in data.columns:
-            if method == 'mean':
-                if 'label' in data.columns:
-                    data_filled[feature] = data.groupby("label")[feature].transform(lambda x: x.fillna(x.mean()))
-                else:
-                    data_filled[feature] = data_filled[feature].fillna(data_filled[feature].mean())
-            else:
-                if 'label' in data.columns:
-                    data_filled[feature] = data.groupby("label")[feature].transform(lambda x: x.fillna(x.median()))
-                else:
-                    data_filled[feature] = data_filled[feature].fillna(data_filled[feature].median())
-    return data_filled
 
-def normalize_data(data, method='minmax', features=FEATURES):
-    """Normalize data for specified features (defaults to FEATURES)"""
-    data_normalized = data.copy()
+def prepare_data(df, features, remove_outliers_first=False):
+    """Fill missing values and normalize features. Optionally remove outliers first."""
+    df = df.copy()
+    
+    # Fill missing values with group median
     for feature in features:
-        if feature in data.columns:
-            if method == 'minmax':
-                x_min = data[feature].min()
-                x_max = data[feature].max()
-                if x_max != x_min:  # Avoid division by zero
-                    data_normalized[feature] = (data[feature] - x_min) / (x_max - x_min)
-            else: 
-                x_mean = data[feature].mean()
-                x_std = data[feature].std()
-                if x_std != 0:  # Avoid division by zero
-                    data_normalized[feature] = (data[feature] - x_mean) / x_std
-    return data_normalized
+        if feature in df.columns:
+            df[feature] = df.groupby("label")[feature].transform(
+                lambda x: x.fillna(x.median())
+            )
+    
+    # Remove outliers before normalization if requested
+    outlier_info = None
+    if remove_outliers_first:
+        df, outlier_mask, inner_mask, outer_mask = remove_outliers(df, features)
+        outlier_info = {
+            'outlier_mask': outlier_mask,
+            'inner_mask': inner_mask,
+            'outer_mask': outer_mask,
+            'n_outliers': outlier_mask.sum(),
+            'n_mild': (inner_mask & ~outer_mask).sum(),
+            'n_extreme': outer_mask.sum()  
+        }
+        print(f"  Removed {outlier_info['n_outliers']} outliers "
+              f"({outlier_info['n_mild']} inner, {outlier_info['n_extreme']} outer)")
+    
+    # Normalize to [0, 1]
+    for feature in features:
+        if feature in df.columns:
+            x_min, x_max = df[feature].min(), df[feature].max()
+            if x_max != x_min:
+                df[feature] = (df[feature] - x_min) / (x_max - x_min)
+    
+    return (df, outlier_info) if remove_outliers_first else df
 
-def remove_outliers(data):
-    """
-    Detects both inner (mild) and outer (extreme) outliers using the IQR method.
-    Returns:
-        cleaned_data: DataFrame with no outer or inner outliers
-        outliers_data: DataFrame with all detected outliers (inner + outer)
-        outlier_mask: Boolean mask for all outliers (inner + outer)
-        inner_outlier_mask: Boolean mask for inner (mild) outliers only
-        outer_outlier_mask: Boolean mask for outer (extreme) outliers only
-    """
-    data_features = data[FEATURES]
-    Q1 = data_features.quantile(0.25)
-    Q3 = data_features.quantile(0.75)
+
+def remove_outliers(df, features):
+    """Remove outliers using IQR method. Returns cleaned data and masks."""
+    Q1 = df[features].quantile(0.25)
+    Q3 = df[features].quantile(0.75)
     IQR = Q3 - Q1
-
-    # Inner outliers: 1.5*IQR
-    lower_inner = Q1 - 1.5 * IQR
-    upper_inner = Q3 + 1.5 * IQR
-    inner_outlier_mask = ((data_features < lower_inner) | (data_features > upper_inner)).any(axis=1)
-
-    # Outer outliers: 3*IQR
-    lower_outer = Q1 - 3 * IQR
-    upper_outer = Q3 + 3 * IQR
-    outer_outlier_mask = ((data_features < lower_outer) | (data_features > upper_outer)).any(axis=1)
-
-    # Any outlier (inner or outer)
-    outlier_mask = inner_outlier_mask | outer_outlier_mask
-
-    cleaned_data = data[~outlier_mask].copy()
-    outliers_data = data[outlier_mask].copy()
-
-    return cleaned_data, outliers_data, outlier_mask, inner_outlier_mask, outer_outlier_mask
-
-# def perform_tsne(data, normalized=False, perplexity=30, metric='euclidean', learning_rate='auto':
-#     X = data[FEATURES]
-#     y = data['label']
-#     if normalized:
-#         X = normalize_data(X)
-#     tsne = TSNE(n_components=2, perplexity=perplexity, metric=metric, learning_rate=learning_rate, random_state=42)
-def evaluate_clusters_libs(data, features, k_min=2, k_max=10, random_state=42, excel_path="cluster_selection.xlsx"):
-    X = data[features].values
-    ks = range(k_min, k_max + 1)
     
+    inner_mask = ((df[features] < Q1 - 1.5 * IQR) | 
+                  (df[features] > Q3 + 1.5 * IQR)).any(axis=1)
+    outer_mask = ((df[features] < Q1 - 3 * IQR) | 
+                  (df[features] > Q3 + 3 * IQR)).any(axis=1)
+    
+    outlier_mask = inner_mask | outer_mask
+    cleaned = df[~outlier_mask].copy()
+    
+    return cleaned, outlier_mask, inner_mask, outer_mask
+
+
+# ============================================================================
+# CLUSTER ANALYSIS
+# ============================================================================
+
+
+def compute_empirical_k(m):
+    """Compute optimal k using empirical formula: k ≈ sqrt(m/2)."""
+    return int(np.sqrt(m / 2))
+
+
+def compute_clustering_metrics(df, features, k_range=K_RANGE):
+    """Compute inertia and silhouette scores for range of k values."""
+    X = df[features].values
     results = []
-    for k in ks:
-        km = KMeans(n_clusters=k, random_state=random_state, n_init=10).fit(X)
-        sil_score = silhouette_score(X, km.labels_) if k > 1 else float('nan')
-        results.append({
-            'k': k,
-            'inertia': km.inertia_,
-            'silhouette': sil_score
-        })
     
-    results_df = pd.DataFrame(results)
-    results_df.to_excel(excel_path, index=False)
+    for k in k_range:
+        km = KMeans(n_clusters=k, random_state=42, n_init=10).fit(X)
+        sil = silhouette_score(X, km.labels_) if k > 1 else np.nan
+        results.append({'k': k, 'inertia': km.inertia_, 'silhouette': sil})
     
-    return {
-        'elbow': results_df,
-        'optimal_k': results_df.loc[results_df['silhouette'].idxmax(), 'k']
-    }
+    return pd.DataFrame(results)
+
+
+def find_elbow_k(metrics_df):
+    """Find elbow point using perpendicular distance to line method."""
+    xs = metrics_df['k'].values.astype(float)
+    ys = metrics_df['inertia'].values.astype(float)
+    
+    # Line from first to last point
+    x1, y1 = xs[0], ys[0]
+    x2, y2 = xs[-1], ys[-1]
+    
+    # Distance from each point to line
+    a, b = y2 - y1, -(x2 - x1)
+    c = x2 * y1 - y2 * x1
+    denom = np.sqrt(a**2 + b**2)
+    
+    if denom == 0:
+        return int(xs[0])
+    
+    distances = [abs(a * x + b * y + c) / denom for x, y in zip(xs, ys)]
+    return int(xs[np.argmax(distances)])
+
+
+def choose_optimal_k(metrics_df, elbow_k, empirical_k, sil_k):
+    """Choose k based on elbow, silhouette, and empirical method agreement."""
+    
+    # If all three agree
+    if elbow_k == sil_k == empirical_k:
+        return elbow_k, 'all methods agree'
+    
+    # If two methods agree
+    if elbow_k == empirical_k:
+        return elbow_k, 'elbow and empirical agree'
+    if elbow_k == sil_k:
+        return elbow_k, 'elbow and silhouette agree'
+    if sil_k == empirical_k:
+        return sil_k, 'silhouette and empirical agree'
+    
+    # Check silhouette scores for elbow vs empirical
+    sil_at_elbow = metrics_df.loc[metrics_df['k'] == elbow_k, 'silhouette'].values
+    sil_at_empirical = metrics_df.loc[metrics_df['k'] == empirical_k, 'silhouette'].values
+    sil_best = metrics_df.loc[metrics_df['k'] == sil_k, 'silhouette'].values[0]
+    
+    # Prioritize empirical if it has good silhouette
+    if len(sil_at_empirical) > 0 and not np.isnan(sil_at_empirical[0]):
+        if sil_best - sil_at_empirical[0] < 0.02:
+            return empirical_k, 'empirical chosen (reasonable silhouette)'
+    
+    # Fall back to elbow
+    if len(sil_at_elbow) > 0 and not np.isnan(sil_at_elbow[0]):
+        if not np.isnan(sil_best) and (sil_best - sil_at_elbow[0]) > 0.02:
+            return sil_k, 'silhouette significantly better'
+    
+    return elbow_k, 'elbow chosen (default)'
+
+
+def fit_kmeans(df, features, k):
+    """Fit KMeans and return model and metrics."""
+    X = df[features].values
+    km = KMeans(n_clusters=k, random_state=42, n_init=10).fit(X)
+    sil = silhouette_score(X, km.labels_)
+    counts = np.bincount(km.labels_)
+    sizes = {int(i): int(v) for i, v in enumerate(counts)}
+    
+    return km, {'silhouette': sil, 'inertia': km.inertia_, 'sizes': sizes}
+
+
+# ============================================================================
+# VISUALIZATION
+# ============================================================================
+
+
+def plot_metrics(metrics_df, title, elbow_k=None, empirical_k=None, prefix=""):
+    """Plot elbow and silhouette curves with empirical k marked."""
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+    
+    # Elbow plot
+    axes[0].plot(metrics_df['k'], metrics_df['inertia'], '-o')
+    if elbow_k:
+        y = metrics_df.loc[metrics_df['k'] == elbow_k, 'inertia'].values[0]
+        axes[0].scatter([elbow_k], [y], color='red', s=100, zorder=5, label=f'Elbow k={elbow_k}')
+        axes[0].annotate(f"Elbow\nk={elbow_k}", (elbow_k, y), 
+                        xytext=(10, -10), textcoords="offset points", ha='left')
+    if empirical_k:
+        y = metrics_df.loc[metrics_df['k'] == empirical_k, 'inertia'].values[0]
+        axes[0].scatter([empirical_k], [y], color='green', s=100, marker='^', zorder=5, label=f'Empirical k={empirical_k}')
+        axes[0].annotate(f"Empirical\nk={empirical_k}", (empirical_k, y), 
+                        xytext=(10, 10), textcoords="offset points", ha='left')
+    axes[0].set_xlabel('k')
+    axes[0].set_ylabel('Inertia')
+    axes[0].set_title(f"{title} - Elbow Method")
+    axes[0].legend()
+    
+    # Silhouette plot
+    axes[1].plot(metrics_df['k'], metrics_df['silhouette'], '-o')
+    if elbow_k:
+        y = metrics_df.loc[metrics_df['k'] == elbow_k, 'silhouette'].values[0]
+        axes[1].scatter([elbow_k], [y], color='red', s=100, zorder=5, label=f'Elbow k={elbow_k}')
+    if empirical_k:
+        y = metrics_df.loc[metrics_df['k'] == empirical_k, 'silhouette'].values[0]
+        axes[1].scatter([empirical_k], [y], color='green', s=100, marker='^', zorder=5, label=f'Empirical k={empirical_k}')
+    axes[1].set_xlabel('k')
+    axes[1].set_ylabel('Silhouette Score')
+    axes[1].set_title(f"{title} - Silhouette Score")
+    axes[1].legend()
+    
+    plt.tight_layout()
+    plt.savefig(f"{prefix}_metrics.png", bbox_inches='tight', dpi=100)
+    plt.show()
+
+
+def compute_tsne(df, features):
+    """Compute t-SNE embedding."""
+    X = df[features].values
+    tsne = TSNE(n_components=2, random_state=42, perplexity=50)
+    embedding = tsne.fit_transform(X)
+    return pd.DataFrame(embedding, columns=['Dim1', 'Dim2'], index=df.index)
+
+
+def plot_with_outliers(ax, df_tsne, kmeans_labels, outlier_mask, inner_mask, outer_mask, 
+                      title, k, silhouette):
+    """Helper function to plot clusters with inner/outer outlier markers."""
+    colors = plt.cm.tab10
+    
+    # Align masks with df_tsne index
+    outlier_mask_aligned = pd.Series(outlier_mask, index=outlier_mask.index).reindex(df_tsne.index).fillna(False)
+    inner_mask_aligned = pd.Series(inner_mask, index=inner_mask.index).reindex(df_tsne.index).fillna(False)
+    outer_mask_aligned = pd.Series(outer_mask, index=outer_mask.index).reindex(df_tsne.index).fillna(False)
+    
+    for c in sorted(set(kmeans_labels)):
+        label_mask = pd.Series(kmeans_labels == c, index=df_tsne.index)
+        
+        # Normal points (not outliers)
+        mask = (~outlier_mask_aligned) & label_mask
+        pts = df_tsne.loc[mask]
+        ax.scatter(pts['Dim1'], pts['Dim2'], s=30, color=colors(c), 
+                  label=f"Cluster {c}", alpha=0.7)
+        
+        # Inner outliers (square markers)
+        mask_inner = inner_mask_aligned & label_mask
+        pts = df_tsne.loc[mask_inner]
+        if not pts.empty:
+            ax.scatter(pts['Dim1'], pts['Dim2'], s=90, marker='s', 
+                      facecolors=colors(c), edgecolors='k', linewidths=0.8)
+        
+        # Outer outliers (triangle markers)
+        mask_outer = outer_mask_aligned & label_mask
+        pts = df_tsne.loc[mask_outer]
+        if not pts.empty:
+            ax.scatter(pts['Dim1'], pts['Dim2'], s=90, marker='^', 
+                      facecolors=colors(c), edgecolors='k', linewidths=0.8)
+    
+    ax.set_title(f"{title} (k={k})\nSilhouette={silhouette:.4f}")
+    ax.set_xlabel("Dim 1")
+    ax.set_ylabel("Dim 2")
+    ax.legend(loc='best', fontsize='small')
+
+
+def plot_clusters_comparison(df_sel, df_all, kmeans_sel, kmeans_all, 
+                            outlier_mask, inner_mask, outer_mask, 
+                            opt_k_sel, opt_k_all, sil_sel, sil_all):
+    """Plot selected features (with outliers) vs all features."""
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+    # Selected features with outliers
+    plot_with_outliers(axes[0], df_sel, kmeans_sel.labels_, outlier_mask, inner_mask, outer_mask,
+                      "Selected Features", opt_k_sel, sil_sel)
+    
+    # All features with outliers
+    plot_with_outliers(axes[1], df_all, kmeans_all.labels_, outlier_mask, inner_mask, outer_mask,
+                      "All Features", opt_k_all, sil_all)
+    
+    plt.tight_layout()
+    plt.savefig("comparison_clusters.png", bbox_inches='tight', dpi=100)
+    plt.show()
+
+
+def plot_cleaned_comparison(df_tsne, labels_pred, labels_recomp, 
+                           original_data, features,
+                           k, sil_pred, sil_recomp):
+    """Plot cleaned data: predicted vs recomputed clusters with outlier markers."""
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+    # Detect outliers in original data for visualization
+    _, outlier_mask, inner_mask, outer_mask = remove_outliers(original_data, features)
+    
+    # Filter masks to cleaned data indices
+    cleaned_indices = df_tsne.index
+    outlier_mask_cleaned = outlier_mask.reindex(cleaned_indices).fillna(False)
+    inner_mask_cleaned = inner_mask.reindex(cleaned_indices).fillna(False)
+    outer_mask_cleaned = outer_mask.reindex(cleaned_indices).fillna(False)
+    
+    # Predicted clusters
+    plot_with_outliers(axes[0], df_tsne, labels_pred, outlier_mask_cleaned, 
+                      inner_mask_cleaned, outer_mask_cleaned,
+                      "Assigned to Original", k, sil_pred)
+    
+    # Recomputed clusters
+    plot_with_outliers(axes[1], df_tsne, labels_recomp, outlier_mask_cleaned,
+                      inner_mask_cleaned, outer_mask_cleaned,
+                      "Recomputed on Cleaned", k, sil_recomp)
+    
+    plt.tight_layout()
+    plt.savefig("cleaned_comparison.png", bbox_inches='tight', dpi=100)
+    plt.show()
+
+
+# ============================================================================
+# MAIN PIPELINE
+# ============================================================================
 
 
 def main():
-    data_load = load_data()
-    data_filled = fill_missing_values(data_load)
-    data_normal = normalize_data(data_filled)
+    # Load and prepare data
+    print("Loading data...")
+    data = load_data()
+    
+    # Get all numeric features
+    all_features = [col for col in data.select_dtypes(include=[np.number]).columns 
+                   if col != 'label']
+    
+    # ========================================================================
+    # ANALYSIS 1: Selected FEATURES
+    # ========================================================================
+    print("\n" + "="*70)
+    print("ANALYZING SELECTED FEATURES")
+    print("="*70)
+    
+    if REMOVE_OUTLIERS_BEFORE_NORMALIZATION:
+        print("\nRemoving outliers before normalization...")
+        data_sel, outlier_info_sel = prepare_data(data, FEATURES, remove_outliers_first=True)
+    else:
+        data_sel = prepare_data(data, FEATURES)
+        outlier_info_sel = None
+    
+    # Compute empirical k
+    m_sel = len(data_sel)
+    empirical_k_sel = compute_empirical_k(m_sel)
+    print(f"\nEmpirical k (sqrt(m/2)): {empirical_k_sel} (m={m_sel})")
+    
+    metrics_sel = compute_clustering_metrics(data_sel, FEATURES)
+    
+    elbow_k_sel = find_elbow_k(metrics_sel)
+    sil_k_sel = int(metrics_sel.loc[metrics_sel['silhouette'].idxmax(), 'k'])
+    opt_k_sel, reason_sel = choose_optimal_k(metrics_sel, elbow_k_sel, empirical_k_sel, sil_k_sel)
+    
+    print(f"Elbow k: {elbow_k_sel}")
+    print(f"Silhouette best k: {sil_k_sel}")
+    print(f"Optimal k: {opt_k_sel} ({reason_sel})")
+    
+    plot_metrics(metrics_sel, "Selected Features", elbow_k_sel, empirical_k_sel, "selected")
+    
+    kmeans_sel, metrics_sel_final = fit_kmeans(data_sel, FEATURES, opt_k_sel)
+    print(f"Silhouette: {metrics_sel_final['silhouette']:.4f}")
+    print(f"Cluster sizes: {metrics_sel_final['sizes']}")
+    
+    # ========================================================================
+    # ANALYSIS 2: All FEATURES
+    # ========================================================================
+    print("\n" + "="*70)
+    print("ANALYZING ALL FEATURES")
+    print("="*70)
+    
+    if REMOVE_OUTLIERS_BEFORE_NORMALIZATION:
+        print("\nRemoving outliers before normalization...")
+        data_all, outlier_info_all = prepare_data(data, all_features, remove_outliers_first=True)
+    else:
+        data_all = prepare_data(data, all_features)
+        outlier_info_all = None
+    
+    # Compute empirical k
+    m_all = len(data_all)
+    empirical_k_all = compute_empirical_k(m_all)
+    print(f"\nEmpirical k (sqrt(m/2)): {empirical_k_all} (m={m_all})")
+    
+    metrics_all = compute_clustering_metrics(data_all, all_features)
+    
+    elbow_k_all = find_elbow_k(metrics_all)
+    sil_k_all = int(metrics_all.loc[metrics_all['silhouette'].idxmax(), 'k'])
+    opt_k_all, reason_all = choose_optimal_k(metrics_all, elbow_k_all, empirical_k_all, sil_k_all)
+    
+    print(f"Elbow k: {elbow_k_all}")
+    print(f"Silhouette best k: {sil_k_all}")
+    print(f"Optimal k: {opt_k_all} ({reason_all})")
+    
+    plot_metrics(metrics_all, "All Features", elbow_k_all, empirical_k_all, "all")
+    
+    kmeans_all, metrics_all_final = fit_kmeans(data_all, all_features, opt_k_all)
+    print(f"Silhouette: {metrics_all_final['silhouette']:.4f}")
+    print(f"Cluster sizes: {metrics_all_final['sizes']}")
+    
+    # ========================================================================
+    # VISUALIZATION: Comparison Plot
+    # ========================================================================
+    print("\n" + "="*70)
+    print("CREATING VISUALIZATIONS")
+    print("="*70)
+    
+    # Compute t-SNE embeddings
+    tsne_sel = compute_tsne(data_sel, FEATURES)
+    tsne_sel['cluster'] = kmeans_sel.labels_
+    
+    tsne_all = compute_tsne(data_all, all_features)
+    tsne_all['cluster'] = kmeans_all.labels_
+    
+    # Detect outliers (for visualization - either from early removal or detect now)
+    if REMOVE_OUTLIERS_BEFORE_NORMALIZATION and outlier_info_sel:
+        outlier_mask = outlier_info_sel['outlier_mask']
+        inner_mask = outlier_info_sel['inner_mask']
+        outer_mask = outlier_info_sel['outer_mask']
+    else:
+        _, outlier_mask, inner_mask, outer_mask = remove_outliers(data, FEATURES)
+    
+    plot_clusters_comparison(tsne_sel, tsne_all, kmeans_sel, kmeans_all,
+                            outlier_mask, inner_mask, outer_mask,
+                            opt_k_sel, opt_k_all,
+                            metrics_sel_final['silhouette'],
+                            metrics_all_final['silhouette'])
+    
+    # ========================================================================
+    # ANALYSIS 3: Cleaned Data (Selected Features Only)
+    # ========================================================================
+    print("\n" + "="*70)
+    print("ANALYZING CLEANED DATA (OUTLIERS REMOVED)")
+    print("="*70)
+    
+    data_cleaned, outlier_info = prepare_data(data, FEATURES, remove_outliers_first=True)
+    data_filled = prepare_data(data, FEATURES)
+    # Compute empirical k for cleaned data
+    m_clean = len(data_cleaned)
+    empirical_k_clean = compute_empirical_k(m_clean)
+    print(f"\nEmpirical k (sqrt(m/2)): {empirical_k_clean} (m={m_clean})")
+    
+    metrics_clean = compute_clustering_metrics(data_cleaned, FEATURES)
+    elbow_k_clean = find_elbow_k(metrics_clean)
+    sil_k_clean = int(metrics_clean.loc[metrics_clean['silhouette'].idxmax(), 'k'])
+    opt_k_clean, reason_clean = choose_optimal_k(metrics_clean, elbow_k_clean, empirical_k_clean, sil_k_clean)
+    
+    print(f"Elbow k: {elbow_k_clean}")
+    print(f"Silhouette best k: {sil_k_clean}")
+    print(f"Optimal k: {opt_k_clean} ({reason_clean})")
+    
+    plot_metrics(metrics_clean, "Cleaned Data", elbow_k_clean, empirical_k_clean, "cleaned")
+    
+    # Compare: assign to original vs recompute
+    X_clean = data_cleaned[FEATURES].values
+    
+    labels_pred = kmeans_sel.predict(X_clean)
+    sil_pred = silhouette_score(X_clean, labels_pred)
+    
+    kmeans_recomp, metrics_recomp = fit_kmeans(data_cleaned, FEATURES, opt_k_clean)
+    
+    print(f"\nAssigned to original: Silhouette={sil_pred:.4f}")
+    print(f"Recomputed: Silhouette={metrics_recomp['silhouette']:.4f}")
+    print(f"Recomputed cluster sizes: {metrics_recomp['sizes']}")
+    
+    tsne_clean = compute_tsne(data_cleaned, FEATURES)
+    plot_cleaned_comparison(tsne_clean, labels_pred, kmeans_recomp.labels_,
+                           data_filled, FEATURES,
+                           opt_k_clean, sil_pred, metrics_recomp['silhouette'])
+    
+    # Save results
+    data_sel['cluster'] = kmeans_sel.labels_
+    data_sel.to_csv("clustered_selected_features.csv", index=False)
+    data_cleaned['cluster'] = kmeans_recomp.labels_
+    data_cleaned.to_csv("cleaned_selected_features.csv", index=False)
+    
+    print("\n" + "="*70)
+    print("ANALYSIS COMPLETE")
+    print("="*70)
 
-    # evaluate on selected FEATURES
-    results_selected = evaluate_clusters_libs(data_normal, FEATURES, k_min=2, k_max=10, random_state=42)
-    print("Optimal k (selected features):", results_selected.get("optimal_k"))
-    print("Elbow table (selected features):\n", results_selected["elbow"].head())
-
-    # prepare all numeric features (exclude 'label')
-    numeric_columns = data_load.select_dtypes(include=[np.number]).columns.tolist()
-    if 'label' in numeric_columns:
-        numeric_columns.remove('label')
-    all_features = numeric_columns
-
-    if len(all_features) == 0:
-        raise RuntimeError("No numeric features found for clustering with all_features.")
-
-    data_filled_all = fill_missing_values(data_load, features=all_features)
-    data_normal_all = normalize_data(data_filled_all, features=all_features)
-
-    results_all = evaluate_clusters_libs(data_normal_all, all_features, k_min=2, k_max=10, random_state=42)
-    print("Optimal k (all features):", results_all.get("optimal_k"))
-    print("Elbow table (all features):\n", results_all["elbow"].head())
-
-    # clusterize both datasets with their respective optimal k (fallback 3)
-    opt_k_sel = int(results_selected.get("optimal_k"))
-    opt_k_all = int(results_all.get("optimal_k"))
-
-    X_sel = data_normal[FEATURES].values
-    X_all = data_normal_all[all_features].values
-
-    kmeans_sel = KMeans(n_clusters=opt_k_sel, random_state=42, n_init=10).fit(X_sel)
-    kmeans_all = KMeans(n_clusters=opt_k_all, random_state=42, n_init=10).fit(X_all)
-
-    data_normal['cluster_sel'] = kmeans_sel.labels_
-    data_normal_all['cluster_all'] = kmeans_all.labels_
-
-    sizes_sel = dict(enumerate(np.bincount(kmeans_sel.labels_)))
-    sizes_all = dict(enumerate(np.bincount(kmeans_all.labels_)))
-
-    sil_sel = silhouette_score(X_sel, kmeans_sel.labels_)
-    sil_all = silhouette_score(X_all, kmeans_all.labels_)
-
-    print(f"KMeans (selected FEATURES) k={opt_k_sel} sizes={sizes_sel} inertia={kmeans_sel.inertia_} silhouette={sil_sel}")
-    print(f"KMeans (all features)      k={opt_k_all} sizes={sizes_all} inertia={kmeans_all.inertia_} silhouette={sil_all}")
-
-    # save results
-    data_normal.to_csv("data_normal_clustered_selected_features.csv", index=False)
-    # pd.DataFrame(kmeans_sel.cluster_centers_, columns=FEATURES).to_csv("kmeans_centers_selected_features.csv", index_label="cluster")
-    # pd.DataFrame(kmeans_all.cluster_centers_, columns=all_features).to_csv("kmeans_centers_all_features.csv", index_label="cluster")
-
-    # compute 2D embeddings for visualization
-    tsne_sel = TSNE(n_components=2, random_state=42, perplexity=50)
-    X_tsne_sel = tsne_sel.fit_transform(X_sel)
-    df_tsne_sel = pd.DataFrame(X_tsne_sel, columns=['Dim1','Dim2'])
-    df_tsne_sel['cluster'] = kmeans_sel.labels_
-    df_tsne_sel['label'] = data_normal['label'].values
-
-    tsne_all = TSNE(n_components=2, random_state=42, perplexity=50)
-    X_tsne_all = tsne_all.fit_transform(X_all)
-    df_tsne_all = pd.DataFrame(X_tsne_all, columns=['Dim1','Dim2'])
-    df_tsne_all['cluster'] = kmeans_all.labels_
-    df_tsne_all['label'] = data_normal_all['label'].values
-
-    # detect outliers only for selected FEATURES (do NOT run remove_outliers for all_features)
-    cleaned_sel, outliers_sel, outlier_mask_sel, inner_mask_sel, outer_mask_sel = remove_outliers(data_normal)
-
-    # Re-evaluate optimal k on cleaned selected dataset
-    results_clean_selected = evaluate_clusters_libs(cleaned_sel, FEATURES, k_min=2, k_max=10, random_state=42, excel_path="cluster_selection_cleaned_selected.xlsx")
-    print("Optimal k (selected features) on cleaned data:", results_clean_selected.get("optimal_k"))
-    print("Elbow table (selected features, cleaned):\n", results_clean_selected["elbow"].head())
-    opt_k_sel_new = int(results_clean_selected.get("optimal_k"))
-    # prepare cleaned arrays for assignment/re-fit
-    X_clean = cleaned_sel[FEATURES].values
-
-    # assign cleaned points to original clusters (predict) and compute silhouette
-    labels_clean_pred = kmeans_sel.predict(X_clean)
-    silhouette_predict = silhouette_score(X_clean, labels_clean_pred)
-
-    # recompute clustering on cleaned data (fit) and compute silhouette
-    kmeans_clean_recomputed = KMeans(n_clusters=opt_k_sel_new, random_state=42, n_init=10).fit(X_clean)
-    labels_clean_recomputed = kmeans_clean_recomputed.labels_
-    sil_clean_recomputed = silhouette_score(X_clean, labels_clean_recomputed)
-
-    # t-SNE for cleaned data (for both predict and recomputed visualizations we'll use same embedding)
-    tsne_clean = TSNE(n_components=2, random_state=42, perplexity=50)
-    X_tsne_clean = tsne_clean.fit_transform(X_clean)
-    df_tsne_clean = pd.DataFrame(X_tsne_clean, columns=['Dim1','Dim2'])
-    df_tsne_clean['cluster_pred'] = labels_clean_pred
-    df_tsne_clean['cluster_recomputed'] = labels_clean_recomputed
-    df_tsne_clean['label'] = cleaned_sel['label'].values
-
-
-
-    # save cleaned selected data and its t-SNE embedding for convenience
-    cleaned_sel.to_csv("cleaned_selected_features.csv", index=False)
-
-    # First figure: selected FEATURES with outliers highlighted and all-features plot (no outliers overlay)
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    colors = plt.cm.get_cmap("tab10")
-
-    # Selected FEATURES: normal points by cluster, inner outliers= squares, outer outliers= triangles
-    ax = axes[0]
-    for c in sorted(df_tsne_sel['cluster'].unique()):
-        mask_normal = (~outlier_mask_sel) & (df_tsne_sel['cluster'] == c)
-        pts = df_tsne_sel[mask_normal]
-        ax.scatter(pts['Dim1'], pts['Dim2'], s=30, color=colors(c % 10), label=f"cluster {c}", alpha=0.7)
-    for c in sorted(df_tsne_sel['cluster'].unique()):
-        mask_inner = inner_mask_sel & (df_tsne_sel['cluster'] == c)
-        pts = df_tsne_sel[mask_inner]
-        if not pts.empty:
-            ax.scatter(pts['Dim1'], pts['Dim2'], s=90, marker='s', facecolors=colors(c % 10), edgecolors='k', linewidths=0.8, label=f"cluster {c} inner outlier")
-    for c in sorted(df_tsne_sel['cluster'].unique()):
-        mask_outer = outer_mask_sel & (df_tsne_sel['cluster'] == c)
-        pts = df_tsne_sel[mask_outer]
-        if not pts.empty:
-            ax.scatter(pts['Dim1'], pts['Dim2'], s=90, marker='^', facecolors=colors(c % 10), edgecolors='k', linewidths=0.8, label=f"cluster {c} outer outlier")
-
-    ax.set_title(f"t-SNE (selected FEATURES), k={opt_k_sel}\nSilhouette (predict)={silhouette_predict:.4f}")
-    ax.set_xlabel("Dim1"); ax.set_ylabel("Dim2")
-    handles, labels_ = ax.get_legend_handles_labels()
-    by_label = dict(zip(labels_, handles))
-    ax.legend(by_label.values(), by_label.keys(), loc='best', fontsize='small')
-
-    # All features plot (no outlier overlay)
-    ax = axes[1]
-    for c in sorted(df_tsne_all['cluster'].unique()):
-        sub = df_tsne_all[df_tsne_all['cluster'] == c]
-        ax.scatter(sub['Dim1'], sub['Dim2'], s=30, color=colors(c % 10), label=f"cluster {c}", alpha=0.7)
-    ax.set_title(f"t-SNE (all FEATURES), k={opt_k_all}")
-    ax.set_xlabel("Dim1"); ax.set_ylabel("Dim2")
-    ax.legend(loc='best', fontsize='small')
-
-    plt.tight_layout()
-    plt.show()
-
-    # Second figure: cleaned data - left = assignment-to-original-clusters (predict), right = recomputed (fit)
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    ax = axes[0]
-    ax.set_title(f"Assigned to original KMeans (predict) k={opt_k_sel_new}\nSilhouette={silhouette_predict:.4f}")
-    for c in sorted(df_tsne_clean['cluster_pred'].unique()):
-        sub = df_tsne_clean[df_tsne_clean['cluster_pred'] == c]
-        ax.scatter(sub['Dim1'], sub['Dim2'], s=30, color=colors(c % 10), label=f"cluster {c}", alpha=0.7)
-    ax.set_xlabel("Dim1"); ax.set_ylabel("Dim2")
-    ax.legend(loc='best', fontsize='small')
-
-    ax = axes[1]
-    ax.set_title(f"Recomputed on cleaned data (fit) k={opt_k_sel_new}\nSilhouette={sil_clean_recomputed:.4f}")
-    for c in sorted(df_tsne_clean['cluster_recomputed'].unique()):
-        sub = df_tsne_clean[df_tsne_clean['cluster_recomputed'] == c]
-        ax.scatter(sub['Dim1'], sub['Dim2'], s=30, color=colors(c % 10), label=f"cluster {c}", alpha=0.7)
-    ax.set_xlabel("Dim1"); ax.set_ylabel("Dim2")
-    ax.legend(loc='best', fontsize='small')
-
-    plt.tight_layout()
-    plt.show()
-
-    print(f"Recomputed KMeans on cleaned data: k={opt_k_sel_new}, inertia={kmeans_clean_recomputed.inertia_:.4f}, silhouette={sil_clean_recomputed:.4f}")
 
 if __name__ == "__main__":
     main()
