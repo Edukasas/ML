@@ -48,15 +48,6 @@ def normalize_data(data, method='minmax', features=FEATURES):
     return data_normalized
 
 def remove_outliers(data):
-    """
-    Detects both inner (mild) and outer (extreme) outliers using the IQR method.
-    Returns:
-        cleaned_data: DataFrame with no outer or inner outliers
-        outliers_data: DataFrame with all detected outliers (inner + outer)
-        outlier_mask: Boolean mask for all outliers (inner + outer)
-        inner_outlier_mask: Boolean mask for inner (mild) outliers only
-        outer_outlier_mask: Boolean mask for outer (extreme) outliers only
-    """
     data_features = data[FEATURES]
     Q1 = data_features.quantile(0.25)
     Q3 = data_features.quantile(0.75)
