@@ -1,65 +1,42 @@
 import pandas as pd
 import numpy as np
 
-INPUT_FILE = 'clustered_selected_features.csv'
-OUTPUT_FILE = 'cluster_descriptive_statistics.xlsx'
+# EITHER: load your real data
+df = pd.read_csv("sampled_all_prepared.csv")  # must contain a 'label' column and the six features
+
 FEATURES = ["RR_l_0", "RR_l_0/RR_l_1", "RR_r_0", "R_val", "P_val", "signal_std"]
 
-# Load
-df = pd.read_csv(INPUT_FILE)
+# ensure numeric for the six features
+for c in FEATURES:
+    df[c] = pd.to_numeric(df[c], errors="coerce")  # coerce non-numeric to NaN [web:43][web:49][web:51]
 
-# Validate required columns
-missing = [c for c in ['cluster'] + FEATURES if c not in df.columns]
-if missing:
-    raise ValueError(f"Missing required columns: {missing}")
+def build_stats_table(frame: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    for feat in FEATURES:
+        s = frame[feat].dropna()
+        rows.append(
+            {
+                "feature": feat,
+                "count": s.count(),
+                "mean": s.mean(),
+                "std": s.std(ddof=1),
+                "min": s.min(),
+                "q25": s.quantile(0.25),
+                "median": s.median(),
+                "q75": s.quantile(0.75),
+                "max": s.max(),
+                "dispersion": s.var(ddof=1),
+            }
+        )
+    tbl = pd.DataFrame(rows).set_index("feature")
+    return tbl[["count","mean","std","min","q25","median","q75","max","dispersion"]]
 
-# Aggregations
-agg_funcs = {
-    'count': 'count',
-    'mean': 'mean',
-    'std': 'std',
-    'min': 'min',
-    'q25': lambda s: s.quantile(0.25),
-    'median': 'median',
-    'q75': lambda s: s.quantile(0.75),
-    'max': 'max',
-    'dispersion': 'var',
-}
+# compute table per label and write to separate sheets
+out_path = "feature_summary_by_label.xlsx"
+with pd.ExcelWriter(out_path, engine="openpyxl") as writer:  # multi-sheet writer [web:31][web:52]
+    for label, g in df.groupby("label", dropna=False):       # group rows by label [web:24]
+        sheet = f"label_{label}" if pd.notna(label) else "label_missing"
+        tbl = build_stats_table(g)
+        tbl.to_excel(writer, sheet_name=sheet, index=True)    # one sheet per label [web:31][web:52]
 
-# Build MultiIndex columns cleanly
-pieces = []
-for feat in FEATURES:
-    g = df.groupby('cluster')[[feat]]
-    part = g.agg(**{
-        'count': (feat, 'count'),
-        'mean': (feat, 'mean'),
-        'std': (feat, 'std'),
-        'min': (feat, 'min'),
-        'q25': (feat, lambda s: s.quantile(0.25)),
-        'median': (feat, 'median'),
-        'q75': (feat, lambda s: s.quantile(0.75)),
-        'max': (feat, 'max'),
-        'dispersion': (feat, 'var'),
-    })
-    part.index.name = 'Cluster'
-    part.columns = pd.MultiIndex.from_product([[feat], part.columns])
-    pieces.append(part)
-
-wide = pd.concat(pieces, axis=1).sort_index()
-
-# Round numeric stats except count
-for feat in FEATURES:
-    for stat in ['mean','std','min','q25','median','q75','max','dispersion']:
-        col = (feat, stat)
-        if col in wide.columns:
-            wide[col] = wide[col].astype(float).round(3)
-
-# Excel writers often dislike nested renamers; flatten just for export
-flat_cols = ['{} | {}'.format(top, sub) for top, sub in wide.columns.to_flat_index()]
-wide_export = wide.copy()
-wide_export.columns = flat_cols
-
-with pd.ExcelWriter(OUTPUT_FILE, engine='openpyxl') as writer:
-    wide_export.to_excel(writer, sheet_name='Cluster_Stats', index=True)
-
-print(f"Wrote one-sheet cluster stats to {OUTPUT_FILE} with shape {wide.shape}")
+print(f"Wrote per-label feature summary to {out_path}")
