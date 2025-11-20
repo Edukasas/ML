@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 from sklearn.manifold import TSNE
 
@@ -74,8 +75,22 @@ def prepare_data(df, features, remove_outliers_first=False):
 df = pd.concat([pd.read_csv(f"sampled_label_{l}.csv").assign(label=l) for l in LABELS],
                ignore_index=True)  # read and concat CSVs [web:79][web:73]
 
+error_tokens = ["#NAME?", "#DIV/0!", "#VALUE!", "#N/A", "#NULL!", "#REF!", "#NUM!"]
+df = df.replace(error_tokens, np.nan)  # normalize errors to NaN [web:136]
+
+# 2) Coerce all non-label columns to numeric where possible
+for c in df.columns:
+    if c != "label":
+        df[c] = pd.to_numeric(df[c], errors="coerce")  # non-numeric → NaN [web:136]
+        
+# select all numeric columns
+num_cols = df.select_dtypes(include=[np.number]).columns
+
+# avoid scaling the label itself
+feat_cols = num_cols.drop("label") if "label" in num_cols else num_cols
+
 # 2) Prepare once
-df_prepared = prepare_data(df, FEATURES, remove_outliers_first=False)  # run your function [web:24]
+df_prepared = prepare_data(df, feat_cols, remove_outliers_first=False)  # run your function [web:24]
 
 # 3) Save the result as a new CSV (or overwrite if you prefer)
 df_prepared.to_csv("sampled_all_prepared.csv", index=False)  # simple single write [web:87][web:81]

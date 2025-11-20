@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 # input
-in_path = sys.argv[1] if len(sys.argv) > 1 else "sampled_tsne_prepared.csv"  # accepts CLI arg [web:79]
+in_path = sys.argv[1] if len(sys.argv) > 1 else "sampled_all_prepared.csv"  # accepts CLI arg [web:79]
 df_prepared = pd.read_csv(in_path)
 
 # split
@@ -15,7 +15,7 @@ X_learn, X_test, y_learn, y_test = train_test_split(
 )  # stratified 80/20 split keeps class balance [web:136]
 
 # ensure output folder exists
-out_dir = Path("tsne_data")
+out_dir = Path("original_all_features_data")
 out_dir.mkdir(parents=True, exist_ok=True)
 
 # save to folder
