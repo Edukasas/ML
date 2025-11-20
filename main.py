@@ -4,7 +4,7 @@ from sklearn.manifold import TSNE
 
 
 FEATURES = ["RR_l_0", "RR_l_0/RR_l_1", "RR_r_0", "R_val", "P_val", "signal_std"]
-LABELS = [0, 2]
+LABELS = [0, 1]
 
 REMOVE_OUTLIERS_BEFORE_NORMALIZATION = False
 USE_TSNE_FOR_CLUSTERING = True
@@ -90,16 +90,16 @@ num_cols = df.select_dtypes(include=[np.number]).columns
 feat_cols = num_cols.drop("label") if "label" in num_cols else num_cols
 
 # 2) Prepare once
-df_prepared = prepare_data(df, feat_cols, remove_outliers_first=False)  # run your function [web:24]
+df_prepared = prepare_data(df, FEATURES, remove_outliers_first=False)  # run your function [web:24]
 
 # 3) Save the result as a new CSV (or overwrite if you prefer)
-df_prepared.to_csv("sampled_all_prepared.csv", index=False)  # simple single write [web:87][web:81]
+df_prepared.to_csv("sampled_selected_prepared.csv", index=False)  # simple single write [web:87][web:81]
 
-X = df_prepared[FEATURES].values
-tsne = TSNE(n_components=2, perplexity=TSNE_PERPLEXITY, random_state=RANDOM_STATE, init="random", learning_rate="auto")  # API usage [web:108]
-Z = tsne.fit_transform(X)  # returns 2D coordinates [web:108]
+# X = df_prepared[FEATURES].values
+# tsne = TSNE(n_components=2, perplexity=TSNE_PERPLEXITY, random_state=RANDOM_STATE, init="random", learning_rate="auto")  # API usage [web:108]
+# Z = tsne.fit_transform(X)  # returns 2D coordinates [web:108]
 
-df_tsne = df_prepared.copy()
-df_tsne["tsne_x"] = Z[:, 0]
-df_tsne["tsne_y"] = Z[:, 1]
-df_tsne.to_csv("sampled_tsne_prepared.csv", index=False)
+# df_tsne = df_prepared.copy()
+# df_tsne["tsne_x"] = Z[:, 0]
+# df_tsne["tsne_y"] = Z[:, 1]
+# df_tsne.to_csv("sampled_tsne_prepared.csv", index=False)

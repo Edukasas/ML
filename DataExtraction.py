@@ -7,7 +7,7 @@ df = pd.read_csv(file_path, delimiter=';')
 # Use all columns (no filtering)
 df_selected = df.copy()
 
-for label in [0, 2]:
+for label in [0, 1]:
     df_label = df_selected[df_selected['label'] == label].sample(n=1000, random_state=42)
     output_file = f"sampled_label_{label}.csv"
     df_label.to_csv(output_file, index=False)
