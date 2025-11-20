@@ -2,7 +2,7 @@ import pandas as pd
 
 
 FEATURES = ["RR_l_0", "RR_l_0/RR_l_1", "RR_r_0", "R_val", "P_val", "signal_std"]
-LABELS = [0, 1]
+LABELS = [0, 2]
 
 REMOVE_OUTLIERS_BEFORE_NORMALIZATION = False
 USE_TSNE_FOR_CLUSTERING = True
